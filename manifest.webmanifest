@@ -1,0 +1,15 @@
+{
+  "name": "Charlemos – Spanisch üben",
+  "short_name": "Charlemos",
+  "description": "Spanisch üben mit Claude: sprechen, hören, schreiben.",
+  "lang": "de",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EDF1F3",
+  "theme_color": "#0B6B8A",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
