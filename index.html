@@ -593,6 +593,17 @@ textarea {
     return out.map(function (s) { return s.trim(); });
   }
 
+  // Lehrbuch-Schreibweise „abrazo m“, „aceite m de oliva“, „afueras f pl“, „cliente/-a m/f“:
+  // das Genus-Kürzel nach dem ersten Wort wird zum Artikel davor.
+  function genusWords(raw) {
+    var s = String(raw || '').trim();
+    var m = s.match(/^(\S+)\s+(m\/f|m pl|f pl|m|f)(?=\s|$)(.*)$/);
+    if (!m) return s;
+    var art = { 'm/f': 'el/la', 'm pl': 'los', 'f pl': 'las', 'm': 'el', 'f': 'la' }[m[2]];
+    var word = m[1].replace(/\/-a$/, '');
+    return art + ' ' + word + m[3];
+  }
+
   // CSV wie con_gusto_a1_vokabeln_komplett.csv: Spanisch, Deutsch, Lektion, … (mit oder ohne Kopfzeile).
   function parseVocabCsv(lines) {
     var first = lines[0] || '';
@@ -605,7 +616,7 @@ textarea {
       head.forEach(function (h, i) {
         if (col.es < 0 && /span|espa/.test(h)) col.es = i;
         else if (col.de < 0 && /deutsch|german|alem/.test(h)) col.de = i;
-        else if (col.lek < 0 && /lekt|unidad|lecci|kapitel/.test(h)) col.lek = i;
+        else if (col.lek < 0 && /lekt|unidad|lecci|kapitel|kategor|einheit/.test(h)) col.lek = i;
       });
       rows.shift();
       if (col.es < 0) col.es = 0;
@@ -613,7 +624,7 @@ textarea {
     }
     var byKey = {}, list = [];
     rows.forEach(function (r) {
-      var es = cleanSide(r[col.es], true), de = cleanSide(r[col.de], false);
+      var es = cleanSide(genusWords(r[col.es]), true), de = cleanSide(r[col.de], false);
       if (!es.text || !de.text) return;
       var lek = col.lek >= 0 ? (r[col.lek] || '') : '';
       var k = es.text.toLowerCase();
@@ -703,7 +714,7 @@ textarea {
   }
   function lessonNo(l) {
     if (!l) return 999;
-    if (/bienvenid/i.test(l)) return 0;
+    if (/bienvenid|_b$/i.test(l)) return 0;
     var m = String(l).match(/\d+/);
     return m ? parseInt(m[0], 10) : 998;
   }
