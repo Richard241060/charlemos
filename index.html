@@ -401,37 +401,67 @@ textarea {
     return list[0] || null;
   }
 
+  var IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   var unlocked = false;
   function unlockAudio() {
-    // iOS gibt die Sprachausgabe erst nach einer Berührung frei.
-    if (unlocked || !synth) return;
+    // Nur iOS gibt die Sprachausgabe erst nach einer Berührung frei. Auf Android würde das stören.
+    if (unlocked || !synth || !IS_IOS) return;
     unlocked = true;
     try { var u = new SpeechSynthesisUtterance(' '); u.volume = 0; synth.speak(u); } catch (e) {}
   }
 
+  var speakTimer = null, watchTimer = null;
   function speak(text, onDone) {
     if (!synth || !window.SpeechSynthesisUtterance) {
-      setStatus('Dieser Browser kann nicht vorlesen.');
+      setStatus('Dieser Browser kann nicht vorlesen. Öffne die App in Chrome oder Safari.');
       if (onDone) onDone();
       return;
     }
+    clearTimeout(speakTimer); clearTimeout(watchTimer);
+    var busyNow = false;
+    try { busyNow = synth.speaking || synth.pending; } catch (e) {}
+    try { if (busyNow) synth.cancel(); } catch (e) {}
+    // Chrome auf Android verschluckt eine Ausgabe, die direkt nach cancel() startet. Darum kurz warten.
+    speakTimer = setTimeout(function () { reallySpeak(text, onDone); }, busyNow ? 250 : 0);
+  }
+
+  function reallySpeak(text, onDone) {
+    var done = false, started = false;
+    var finish = function () { if (done) return; done = true; clearTimeout(watchTimer); if (onDone) onDone(); };
     try {
-      synth.cancel();
+      if (!voices.length) loadVoicesNow();
       var u = new SpeechSynthesisUtterance(text);
       var v = pickVoice();
-      u.lang = v ? v.lang : 'es-ES';
-      if (v) u.voice = v;
+      if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'es-ES'; }
       u.rate = parseFloat(rateEl.value) || 0.85;
-      var done = false;
-      var finish = function () { if (done) return; done = true; if (onDone) onDone(); };
+      u.volume = 1;
+      u.onstart = function () { started = true; if (/^Vorlesen/.test(statusEl.textContent)) setStatus(''); };
       u.onend = finish;
-      u.onerror = finish;
+      u.onerror = function (ev) {
+        var code = ev && ev.error;
+        if (code && code !== 'interrupted' && code !== 'canceled') {
+          setStatus('Vorlesen fehlgeschlagen (' + code + '). Prüfe in den Android-Einstellungen unter Sprachausgabe, ob Spanisch installiert ist.');
+        }
+        finish();
+      };
+      try { synth.resume(); } catch (e) {}
       synth.speak(u);
-      if (!v && !spanishVoices().length) setStatus('Keine spanische Stimme auf dem Gerät gefunden. Sie lässt sich in den Systemeinstellungen unter Sprachausgabe nachladen.');
+      // Startet die Ausgabe nicht, sag das statt still zu bleiben.
+      watchTimer = setTimeout(function () {
+        if (!started && !done) {
+          setStatus('Vorlesen startet nicht. Prüfe die Medienlautstärke und in den Android-Einstellungen unter Sprachausgabe, ob eine spanische Stimme installiert ist.');
+          try { synth.cancel(); } catch (e) {}
+          finish();
+        }
+      }, 4000);
+      if (!v) setStatus('Vorlesen … (keine spanische Stimme gefunden, das Gerät nutzt seine Standardstimme)');
     } catch (e) {
       setStatus('Vorlesen hat nicht geklappt.');
-      if (onDone) onDone();
+      finish();
     }
+  }
+  function loadVoicesNow() {
+    try { voices = synth.getVoices() || []; } catch (e) { voices = []; }
   }
   $('testVoice').addEventListener('click', function () {
     unlockAudio();
