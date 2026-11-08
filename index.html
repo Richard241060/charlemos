@@ -410,10 +410,13 @@ textarea {
   function pickVoice(lang) {
     if (lang === 'de') {
       var dl = langVoices('de');
+      dl = dl.filter(function (v) { return v.localService; }).concat(dl.filter(function (v) { return !v.localService; }));
       for (var k = 0; k < dl.length; k++) if (dl[k].lang.toLowerCase().replace('_', '-') === 'de-de') return dl[k];
       return dl[0] || null;
     }
     var list = spanishVoices();
+    // Auf dem Gerät gespeicherte Stimmen zuerst: Netzstimmen scheitern auf Android oft mit „synthesis-failed“.
+    list = list.filter(function (v) { return v.localService; }).concat(list.filter(function (v) { return !v.localService; }));
     var want = voiceEl.value;
     if (want) {
       for (var i = 0; i < list.length; i++) if ((list[i].voiceURI || list[i].name) === want) return list[i];
@@ -460,33 +463,42 @@ textarea {
   }
   function speak(text, onDone) { speakParts([{ sprache: 'es', text: text }], onDone); }
 
-  function speakNext(parts, idx, run, onDone) {
+  // Je Sprache merkt sich die App, welcher Weg auf diesem Gerät funktioniert:
+  // 0 = gewählte Stimme, 1 = nur Sprache angeben (Gerät wählt die Stimme), 2 = Standardstimme des Geräts.
+  var speakMode = { de: 0, es: 0 };
+  function speakNext(parts, idx, run, onDone, attempt) {
     if (run !== speakRun) return;
     if (idx >= parts.length) { if (onDone) onDone(); return; }
     var part = parts[idx];
     var lang = part.sprache === 'de' ? 'de' : 'es';
+    var mode = Math.max(speakMode[lang], attempt || 0);
     var done = false, started = false;
     var next = function () { if (done) return; done = true; clearTimeout(watchTimer); speakNext(parts, idx + 1, run, onDone); };
+    var retry = function () { if (done) return; done = true; clearTimeout(watchTimer); speakNext(parts, idx, run, onDone, mode + 1); };
     try {
       if (!voices.length) loadVoicesNow();
       var u = new SpeechSynthesisUtterance(plain(part.text));
-      var v = pickVoice(lang);
-      if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = lang === 'de' ? 'de-DE' : 'es-ES'; }
+      var v = mode === 0 ? pickVoice(lang) : null;
+      if (v) { u.voice = v; u.lang = v.lang; }
+      else if (mode <= 1) { u.lang = lang === 'de' ? 'de-DE' : 'es-ES'; }
       u.rate = lang === 'de' ? Math.min(1, (parseFloat(rateEl.value) || 0.85) + 0.1) : (parseFloat(rateEl.value) || 0.85);
       u.volume = 1;
-      u.onstart = function () { started = true; if (/^Vorlesen/.test(statusEl.textContent)) setStatus(''); };
+      u.onstart = function () {
+        started = true;
+        if (speakMode[lang] !== mode) { speakMode[lang] = mode; }
+        if (/^Vorlesen/.test(statusEl.textContent)) setStatus('');
+      };
       u.onend = next;
       u.onerror = function (ev) {
         var code = ev && ev.error;
-        if (code && code !== 'interrupted' && code !== 'canceled') {
-          setStatus('Vorlesen fehlgeschlagen (' + code + '). Prüfe in den Android-Einstellungen unter Sprachausgabe, ob die Sprache installiert ist.');
-        }
+        if (code === 'interrupted' || code === 'canceled') { next(); return; }
+        if (!started && mode < 2) { speakMode[lang] = mode + 1; retry(); return; }
+        setStatus('Vorlesen fehlgeschlagen (' + (code || 'unbekannt') + '). Öffne in den Android-Einstellungen „Sprachausgabe“, wähle „Google-Sprachausgabe“ und lade dort Deutsch und Spanisch herunter.');
         next();
       };
       try { synth.resume(); } catch (e) {}
       synth.speak(u);
       // Manche Android-Geräte brauchen beim ersten Mal lange oder melden den Start gar nicht.
-      // Darum nichts abbrechen, nur einen Hinweis zeigen.
       watchTimer = setTimeout(function () {
         if (!started && !done) {
           setStatus('Vorlesen braucht ungewöhnlich lange. Prüfe die Medienlautstärke und tippe auf „Stimme testen“ in den Einstellungen.');
