@@ -921,7 +921,12 @@ textarea {
     if (!f) return;
     var reader = new FileReader();
     reader.onload = function () {
-      var txt = String(reader.result || '').replace(/^\uFEFF/, '');
+      var bytes = new Uint8Array(reader.result || new ArrayBuffer(0));
+      var enc = (bytes[0] === 0xFF && bytes[1] === 0xFE) ? 'utf-16le' : (bytes[0] === 0xFE && bytes[1] === 0xFF) ? 'utf-16be' : 'utf-8';
+      var txt = '';
+      try { txt = new TextDecoder(enc).decode(bytes); } catch (e) {}
+      txt = txt.replace(/^\uFEFF/, '');
+      if (!txt.trim() && f.size > 0) { $('vocabState').textContent = 'Das Handy hat den Inhalt von „' + f.name + '“ nicht herausgegeben (' + Math.round(f.size / 1024) + ' KB angezeigt, 0 gelesen). Bitte die Datei zuerst in „Downloads“ speichern und von dort laden.'; return; }
       var info = '„' + f.name + '“ (' + Math.max(0, Math.round(f.size / 1024)) + ' KB)';
       setStatus('Datei ' + info + ' gelesen.');
       var start = txt.replace(/^[\s\u0000]+/, '').charAt(0);
@@ -949,7 +954,7 @@ textarea {
       showVocabState(); setStatus('Vokabelliste geladen.');
     };
     reader.onerror = function () { $('vocabState').textContent = 'Die Datei ließ sich nicht lesen.'; };
-    reader.readAsText(f, 'utf-8');
+    reader.readAsArrayBuffer(f);
     this.value = '';
   });
   function twoTap(btn, label, action) {
