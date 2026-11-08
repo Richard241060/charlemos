@@ -213,6 +213,8 @@ textarea {
 .round.mic[aria-pressed="true"] { background: var(--live); border-color: var(--live); color: #fff; animation: ring 1.4s infinite; }
 @keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
 .round:disabled { opacity: .45; cursor: not-allowed; }
+.miclang { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; color: var(--muted); }
+.miclang .chip { padding: 3px 12px; }
 .status { min-height: 1.2em; margin: 0; color: var(--muted); font-size: 0.88rem; }
 @media (prefers-reduced-motion: reduce) {
   .typing i, .round.mic[aria-pressed="true"] { animation: none; }
@@ -300,6 +302,10 @@ textarea {
   <main id="log" aria-live="polite"></main>
 
   <footer>
+    <div class="miclang">
+      <span>Ich spreche:</span>
+      <button class="chip" id="micLangChip" type="button" aria-label="Sprache des Mikrofons umschalten">Spanisch</button>
+    </div>
     <div class="compose">
       <textarea id="input" rows="2" placeholder="Schreiben oder Mikrofon antippen" aria-label="Deine Nachricht"></textarea>
       <button class="round go" id="send" type="button" aria-label="Senden">
@@ -354,6 +360,15 @@ textarea {
   restoreSettings();
   bindSetting(levelEl, 'level'); bindSetting(modelEl, 'model'); bindSetting(rateEl, 'rate');
   bindSetting(micLangEl, 'micLang'); bindSetting(voiceEl, 'voice');
+  // Sprache, die das Mikrofon erwartet. Claude stellt sie nach jeder Antwort passend ein; der Knopf schaltet von Hand um.
+  function setMicLang(code) {
+    micLangEl.value = code === 'de' ? 'de-DE' : 'es-ES';
+    $('micLangChip').textContent = code === 'de' ? 'Deutsch' : 'Spanisch';
+  }
+  function micLangCode() { return micLangEl.value === 'de-DE' ? 'de' : 'es'; }
+  setMicLang(micLangEl.value === 'de-DE' ? 'de' : 'es');
+  micLangEl.addEventListener('change', function () { setMicLang(micLangCode()); });
+  $('micLangChip').addEventListener('click', function () { setMicLang(micLangCode() === 'de' ? 'es' : 'de'); });
   bindSetting(autoSpeakEl, 'autoSpeak', true); bindSetting(autoSendEl, 'autoSend', true); bindSetting(handsFreeEl, 'handsFree', true);
 
   function getKey() { return store.get('apiKey', ''); }
@@ -872,6 +887,7 @@ textarea {
   var PROFIL_FELDER = ['ziel', 'zielregion', 'varietaet', 'niveau', 'sitzungsdauer', 'modalitaet', 'rollenspiel', 'korrektur_stil', 'sprachanteil', 'andere_sprachen'];
   function applyResult(data) {
     applyRatings(data.bewertung);
+    if (data.antwort_sprache === 'de' || data.antwort_sprache === 'es') setMicLang(data.antwort_sprache);
     var L = lessonKey(data.lektion);
     if (L && kurs && kurs.einheiten.some(function (e) { return e.lektion === L; }) && L !== kursstand.lektion) {
       kursstand.lektion = L; writeJSON('kursstand', kursstand); showVocabState();
@@ -975,6 +991,7 @@ textarea {
       openSettings(true);
     }
     addBot(g);
+    setMicLang('de');
   }
   function compact(d) {
     return { antwort: d.parts, uebersetzung: d.uebersetzung || '', korrektur: d.korrektur || '', modus: d.modus || '', frage_id: d.frage_id || '', lektion: d.lektion || '' };
@@ -1057,7 +1074,8 @@ textarea {
       kursText(),
       vocabText(),
       'ANTWORTFORMAT: ausschließlich ein JSON-Objekt, ohne Codeblock und ohne Text davor oder danach:',
-      '{"antwort":[{"sprache":"de" oder "es","text":"..."}, ...], "uebersetzung":"deutsche Übersetzung der spanischen Teile oder leer", "korrektur":"kurz auf Deutsch oder leer", "modus":"gespraech|kennenlernen|kurs|erklaeren|vokabeln|lueckentext", "frage_id":"id des gerade abgefragten Wortes oder leer", "bewertung":[{"id":"v12","note":3}] oder [], "lektion":"B, 1–12 oder leer", "profil":{"feld":"wert"} oder {}}',
+      '{"antwort":[{"sprache":"de" oder "es","text":"..."}, ...], "uebersetzung":"deutsche Übersetzung der spanischen Teile oder leer", "korrektur":"kurz auf Deutsch oder leer", "modus":"gespraech|kennenlernen|kurs|erklaeren|vokabeln|lueckentext", "frage_id":"id des gerade abgefragten Wortes oder leer", "bewertung":[{"id":"v12","note":3}] oder [], "lektion":"B, 1–12 oder leer", "profil":{"feld":"wert"} oder {}, "antwort_sprache":"de oder es"}',
+      '"antwort_sprache" ist die Sprache, in der der Lernende vermutlich als Nächstes antwortet – danach richtet sich seine Spracherkennung. Fragst du auf Deutsch etwas, das er auf Deutsch beantworten wird (Kennenlernen, Wünsche, Rückfragen), dann "de". Erwartest du eine spanische Antwort (Vokabel auf Spanisch, Lückentext, Gespräch auf Spanisch), dann "es".',
       'Teile "antwort" so auf, dass jeder Teil nur eine Sprache enthält: Jeder deutsche Satz kommt in einen Teil mit "sprache":"de", jeder spanische Satz in einen Teil mit "sprache":"es" – sie werden mit einer deutschen bzw. spanischen Stimme vorgelesen. Einzelne spanische Wörter mitten in einem deutschen Satz dürfen im deutschen Teil bleiben. Erlaubte Profilfelder: ' + PROFIL_FELDER.join(', ') + '.'
     ].join('\n');
   }
@@ -1091,6 +1109,7 @@ textarea {
           parts: parts, uebersetzung: String(v.uebersetzung || v.de || ''), korrektur: String(v.korrektur || ''),
           modus: String(v.modus || ''), frage_id: String(v.frage_id || ''),
           bewertung: Array.isArray(v.bewertung) ? v.bewertung : [], lektion: String(v.lektion || ''),
+          antwort_sprache: String(v.antwort_sprache || ''),
           profil: v.profil && typeof v.profil === 'object' ? v.profil : {}
         };
       } catch (e) {}
