@@ -922,12 +922,17 @@ textarea {
     var reader = new FileReader();
     reader.onload = function () {
       var txt = String(reader.result || '').replace(/^\uFEFF/, '');
-      setStatus('Datei „' + f.name + '“ gelesen (' + Math.round(txt.length / 1024) + ' KB).');
-      if (/^\s*\{/.test(txt)) {
+      var info = '„' + f.name + '“ (' + Math.max(0, Math.round(f.size / 1024)) + ' KB)';
+      setStatus('Datei ' + info + ' gelesen.');
+      var start = txt.replace(/^[\s\u0000]+/, '').charAt(0);
+      if (!txt.trim()) { $('vocabState').textContent = 'Die Datei ' + info + ' ist leer. Liegt sie vielleicht nur in der Cloud und ist noch nicht auf das Handy geladen?'; return; }
+      if (start === '<') { $('vocabState').textContent = 'Die Datei ' + info + ' ist eine Webseite, kein Kurspaket. Beim Herunterladen wurde vermutlich eine Anmelde- oder Vorschauseite gespeichert. Bitte die Datei direkt herunterladen.'; return; }
+      if (start === '[') { $('vocabState').textContent = 'Die Datei ' + info + ' ist eine JSON-Datei, aber kein Charlemos-Kurspaket. Gesucht ist „charlemos_kurs_con_gusto_a1.json“ (ca. 140 KB).'; return; }
+      if (start === '{') {
         var p = null;
         try { p = JSON.parse(txt); } catch (e) {}
         if (!p || p.format !== 'charlemos-kurs' || !Array.isArray(p.einheiten) || !Array.isArray(p.vokabeln)) {
-          $('vocabState').textContent = 'Die Datei „' + f.name + '“ ist kein Charlemos-Kurspaket' + (p ? '' : ' (sie lässt sich nicht als JSON lesen – ist sie vollständig heruntergeladen?)') + '.'; return;
+          $('vocabState').textContent = 'Die Datei ' + info + ' ist kein Charlemos-Kurspaket' + (p ? '. Gesucht ist „charlemos_kurs_con_gusto_a1.json“ (ca. 140 KB).' : ' – sie lässt sich nicht als JSON lesen. Ist sie vollständig heruntergeladen? Richtig wären ca. 140 KB.'); return;
         }
         var titel = (p.quelle || '').indexOf('Con gusto') !== -1 ? 'Con gusto A1' : 'Kurs';
         kurs = { titel: titel, einheiten: p.einheiten, lueckentexte: p.lueckentexte || [], grammatik: p.grammatik || [] };
@@ -938,7 +943,7 @@ textarea {
         return;
       }
       var list = parseVocabText(txt);
-      if (!list.length) { $('vocabState').textContent = 'In dieser Datei habe ich keine Vokabeln gefunden.'; return; }
+      if (!list.length) { $('vocabState').textContent = 'In der Datei ' + info + ' habe ich keine Vokabeln gefunden. Sie beginnt mit: „' + txt.trim().slice(0, 40).replace(/\s+/g, ' ') + '…“'; return; }
       vocab = list; indexVocab();
       if (!saveVocab()) { $('vocabState').textContent = 'Die Liste ist zu groß für den Speicher dieses Browsers.'; return; }
       showVocabState(); setStatus('Vokabelliste geladen.');
