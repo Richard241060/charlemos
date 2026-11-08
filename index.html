@@ -439,7 +439,17 @@ textarea {
       if (onDone) onDone();
       return;
     }
-    parts = (parts || []).filter(function (p) { return p && String(p.text || '').trim(); });
+    var chunks = [];
+    (parts || []).forEach(function (p) {
+      var t = plain(String((p && p.text) || '')).trim();
+      if (!t) return;
+      (t.match(/[^.!?¡¿…]+[.!?…]*|[¡¿][^.!?]*[.!?]*/g) || [t]).forEach(function (sent) {
+        sent = sent.trim();
+        while (sent.length > 180) { var cut = sent.lastIndexOf(' ', 180); if (cut < 60) cut = 180; chunks.push({ sprache: p.sprache, text: sent.slice(0, cut) }); sent = sent.slice(cut).trim(); }
+        if (sent) chunks.push({ sprache: p.sprache, text: sent });
+      });
+    });
+    parts = chunks;
     clearTimeout(speakTimer); clearTimeout(watchTimer);
     var run = ++speakRun;
     var busyNow = false;
@@ -475,13 +485,13 @@ textarea {
       };
       try { synth.resume(); } catch (e) {}
       synth.speak(u);
+      // Manche Android-Geräte brauchen beim ersten Mal lange oder melden den Start gar nicht.
+      // Darum nichts abbrechen, nur einen Hinweis zeigen.
       watchTimer = setTimeout(function () {
         if (!started && !done) {
-          setStatus('Vorlesen startet nicht. Prüfe die Medienlautstärke und in den Android-Einstellungen unter Sprachausgabe, ob eine ' + (lang === 'de' ? 'deutsche' : 'spanische') + ' Stimme installiert ist.');
-          try { synth.cancel(); } catch (e) {}
-          done = true; if (onDone) onDone();
+          setStatus('Vorlesen braucht ungewöhnlich lange. Prüfe die Medienlautstärke und tippe auf „Stimme testen“ in den Einstellungen.');
         }
-      }, 4000);
+      }, 12000);
     } catch (e) {
       setStatus('Vorlesen hat nicht geklappt.');
       next();
@@ -492,6 +502,10 @@ textarea {
   }
   $('testVoice').addEventListener('click', function () {
     unlockAudio();
+    loadVoicesNow();
+    var es = pickVoice('es'), de = pickVoice('de');
+    setStatus('Stimmen auf dem Gerät: ' + voices.length + ' · Spanisch: ' + (es ? es.name + ' (' + es.lang + ')' : 'keine') +
+      ' · Deutsch: ' + (de ? de.name + ' (' + de.lang + ')' : 'keine') + ' · Browser: ' + (/SamsungBrowser/.test(navigator.userAgent) ? 'Samsung Internet' : /Chrome\//.test(navigator.userAgent) ? 'Chrome' : 'anderer'));
     speakParts([{ sprache: 'de', text: 'Hallo, ich bin deine Spanisch-Begleitung.' }, { sprache: 'es', text: '¡Hola! ¿Empezamos?' }]);
   });
 
