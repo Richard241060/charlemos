@@ -449,7 +449,7 @@ textarea {
       (t.match(/[^.!?¡¿…]+[.!?…]*|[¡¿][^.!?]*[.!?]*/g) || [t]).forEach(function (sent) {
         sent = sent.trim();
         while (sent.length > 180) { var cut = sent.lastIndexOf(' ', 180); if (cut < 60) cut = 180; chunks.push({ sprache: p.sprache, text: sent.slice(0, cut) }); sent = sent.slice(cut).trim(); }
-        if (sent) chunks.push({ sprache: p.sprache, text: sent });
+        if (sent) chunks.push({ sprache: guessLang(sent, p.sprache), text: sent });
       });
     });
     parts = chunks;
@@ -460,6 +460,17 @@ textarea {
     try { if (busyNow) synth.cancel(); } catch (e) {}
     // Chrome auf Android verschluckt eine Ausgabe, die direkt nach cancel() startet. Darum kurz warten.
     speakTimer = setTimeout(function () { speakNext(parts, 0, run, onDone); }, busyNow ? 250 : 0);
+  }
+  // Sicherheitsnetz: Ordnet Claude einen Satz der falschen Sprache zu, erkennt die App das an typischen Wörtern.
+  var DE_W = /\b(und|ich|du|der|die|das|ist|nicht|wir|sie|ein|eine|einen|mit|auf|für|von|zu|den|dem|des|auch|wie|was|bitte|danke|heißt|sagt|sagen|weiter|möchtest|kannst|willst|gut|genau|richtig|übersetzt|bedeutet|man|noch|schon|dann|aber|oder|wenn|weil|dass)\b/gi;
+  var ES_W = /\b(y|yo|tú|el|la|los|las|es|no|un|una|con|para|por|de|del|que|qué|muy|bien|cómo|como|se|dice|está|estás|eres|soy|hola|gracias|vamos|también|pero|o|si|mi|tu|su|me|te|lo|al|en|más)\b/gi;
+  function guessLang(text, fallback) {
+    var t = String(text);
+    var de = (t.match(DE_W) || []).length + ((/[äöüßÄÖÜ]/.test(t)) ? 2 : 0);
+    var es = (t.match(ES_W) || []).length + ((/[ñ¿¡áéíóú]/i.test(t)) ? 2 : 0);
+    if (de >= 2 && de > es * 1.5) return 'de';
+    if (es >= 2 && es > de * 1.5) return 'es';
+    return fallback === 'de' ? 'de' : 'es';
   }
   function speak(text, onDone) { speakParts([{ sprache: 'es', text: text }], onDone); }
 
@@ -1047,7 +1058,7 @@ textarea {
       vocabText(),
       'ANTWORTFORMAT: ausschließlich ein JSON-Objekt, ohne Codeblock und ohne Text davor oder danach:',
       '{"antwort":[{"sprache":"de" oder "es","text":"..."}, ...], "uebersetzung":"deutsche Übersetzung der spanischen Teile oder leer", "korrektur":"kurz auf Deutsch oder leer", "modus":"gespraech|kennenlernen|kurs|erklaeren|vokabeln|lueckentext", "frage_id":"id des gerade abgefragten Wortes oder leer", "bewertung":[{"id":"v12","note":3}] oder [], "lektion":"B, 1–12 oder leer", "profil":{"feld":"wert"} oder {}}',
-      'Teile "antwort" so auf, dass jeder Teil nur eine Sprache enthält (spanische Wörter mitten im deutschen Satz dürfen im deutschen Teil bleiben). Erlaubte Profilfelder: ' + PROFIL_FELDER.join(', ') + '.'
+      'Teile "antwort" so auf, dass jeder Teil nur eine Sprache enthält: Jeder deutsche Satz kommt in einen Teil mit "sprache":"de", jeder spanische Satz in einen Teil mit "sprache":"es" – sie werden mit einer deutschen bzw. spanischen Stimme vorgelesen. Einzelne spanische Wörter mitten in einem deutschen Satz dürfen im deutschen Teil bleiben. Erlaubte Profilfelder: ' + PROFIL_FELDER.join(', ') + '.'
     ].join('\n');
   }
 
