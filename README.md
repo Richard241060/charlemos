@@ -6,6 +6,11 @@ Kleine Web-App zum Spanischüben mit Claude: sprechen, hören, schreiben.
 - Antworten von Claude auf Spanisch, mit deutscher Übersetzung und Korrektur
 - Vorlesen mit spanischer Stimme des Geräts, einstellbares Tempo
 - Gesprächsmodus: nach jeder Antwort hört die App wieder zu
+- Lehrerin im Gespräch: plaudern, Kennenlernen (Profil), Lektionen aus einem Kurspaket,
+  Erklären aus sieben Blickwinkeln, Vokabeln abfragen, Lückentexte – der Lernende bestimmt,
+  Claude macht Vorschläge
+- Wiederholungsplanung nach FSRS-4.5 (Übertragung von Poe V11 `fsrs.py`)
+- Deutsche und spanische Stimme je nach Satzteil; Sprachanteil richtet sich nach dem Niveau
 
 ## Nutzung
 

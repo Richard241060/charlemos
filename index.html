@@ -96,6 +96,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
 
 /* Einstellungen */
 #settings {
+  max-height: 58%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-bottom: 1px solid var(--line);
   padding-block: 12px 14px;
   display: grid;
@@ -149,6 +152,8 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .bot .bubble { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .es { font-family: var(--font-display); font-weight: 600; font-size: 1.22rem; line-height: 1.3; margin: 0; }
 .es strong { color: var(--accent); font-weight: 700; }
+.part-de { font-family: var(--font-body); font-weight: 400; font-size: 1.02rem; }
+.part-es { color: var(--ink); }
 .de { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); }
 .fix { background: var(--warn-bg); color: var(--warn-ink); border-radius: 8px; padding: 8px 12px; font-size: 0.95rem; }
 .fix strong { font-weight: 600; }
@@ -241,13 +246,18 @@ textarea {
     </label>
     <p class="hint" id="keyState"></p>
     <div class="field">
-      <span>Vokabelliste (bleibt nur auf diesem Gerät)</span>
+      <span>Kurspaket oder Vokabelliste (bleibt nur auf diesem Gerät)</span>
       <div class="row">
-        <input id="vocabFile" type="file" accept=".txt,.csv,text/plain,text/csv" hidden>
-        <button class="btn ghost" id="loadVocab" type="button">Liste laden …</button>
+        <input id="vocabFile" type="file" accept=".json,.txt,.csv,application/json,text/plain,text/csv" hidden>
+        <button class="btn ghost" id="loadVocab" type="button">Datei laden …</button>
         <button class="btn ghost" id="resetVocab" type="button" hidden>Lernstand zurücksetzen</button>
       </div>
       <p class="hint" id="vocabState"></p>
+    </div>
+    <div class="field">
+      <span>Lernerprofil (entsteht im Gespräch)</span>
+      <p class="hint" id="profilState"></p>
+      <div class="row"><button class="btn ghost" id="resetProfil" type="button" hidden>Profil löschen</button></div>
     </div>
     <div class="grid2">
       <label class="field" for="level"><span>Niveau</span>
@@ -320,11 +330,6 @@ textarea {
   var ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>';
   var ICON_DE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M9 6c0 5-2 8-5 10M6 11c1 2 3 4 6 5M13 20l4-10 4 10M14.5 17h5"/></svg>';
 
-  var GREETING = {
-    es: '¡Hola! ¿Cómo estás hoy? Cuéntame, ¿qué vas a hacer este fin de semana?',
-    de: 'Hallo! Wie geht es dir heute? Erzähl mir, was du dieses Wochenende vorhast.',
-    korrektur: ''
-  };
 
   /* ---------- Gespeicherte Einstellungen (nur auf diesem Gerät) ---------- */
   var store = {
@@ -374,12 +379,13 @@ textarea {
   }
   toggleSettings.addEventListener('click', function () { openSettings(settings.hidden); });
 
-  /* ---------- Vorlesen ---------- */
+  /* ---------- Vorlesen (deutsche und spanische Stimme) ---------- */
   var synth = window.speechSynthesis || null;
   var voices = [];
-  function spanishVoices() {
-    return voices.filter(function (v) { return (v.lang || '').toLowerCase().replace('_', '-').indexOf('es') === 0; });
+  function langVoices(prefix) {
+    return voices.filter(function (v) { return (v.lang || '').toLowerCase().replace('_', '-').indexOf(prefix) === 0; });
   }
+  function spanishVoices() { return langVoices('es'); }
   function fillVoices() {
     try { voices = synth ? synth.getVoices() : []; } catch (e) { voices = []; }
     var saved = store.get('voice', '');
@@ -401,7 +407,12 @@ textarea {
     fillVoices();
     try { synth.addEventListener('voiceschanged', fillVoices); } catch (e) { synth.onvoiceschanged = fillVoices; }
   }
-  function pickVoice() {
+  function pickVoice(lang) {
+    if (lang === 'de') {
+      var dl = langVoices('de');
+      for (var k = 0; k < dl.length; k++) if (dl[k].lang.toLowerCase().replace('_', '-') === 'de-de') return dl[k];
+      return dl[0] || null;
+    }
     var list = spanishVoices();
     var want = voiceEl.value;
     if (want) {
@@ -420,54 +431,60 @@ textarea {
     try { var u = new SpeechSynthesisUtterance(' '); u.volume = 0; synth.speak(u); } catch (e) {}
   }
 
-  var speakTimer = null, watchTimer = null;
-  function speak(text, onDone) {
+  // Liest eine Folge von Teilen vor: [{sprache:'de'|'es', text}], jeder Teil mit passender Stimme.
+  var speakTimer = null, watchTimer = null, speakRun = 0;
+  function speakParts(parts, onDone) {
     if (!synth || !window.SpeechSynthesisUtterance) {
       setStatus('Dieser Browser kann nicht vorlesen. Öffne die App in Chrome oder Safari.');
       if (onDone) onDone();
       return;
     }
+    parts = (parts || []).filter(function (p) { return p && String(p.text || '').trim(); });
     clearTimeout(speakTimer); clearTimeout(watchTimer);
+    var run = ++speakRun;
     var busyNow = false;
     try { busyNow = synth.speaking || synth.pending; } catch (e) {}
     try { if (busyNow) synth.cancel(); } catch (e) {}
     // Chrome auf Android verschluckt eine Ausgabe, die direkt nach cancel() startet. Darum kurz warten.
-    speakTimer = setTimeout(function () { reallySpeak(text, onDone); }, busyNow ? 250 : 0);
+    speakTimer = setTimeout(function () { speakNext(parts, 0, run, onDone); }, busyNow ? 250 : 0);
   }
+  function speak(text, onDone) { speakParts([{ sprache: 'es', text: text }], onDone); }
 
-  function reallySpeak(text, onDone) {
+  function speakNext(parts, idx, run, onDone) {
+    if (run !== speakRun) return;
+    if (idx >= parts.length) { if (onDone) onDone(); return; }
+    var part = parts[idx];
+    var lang = part.sprache === 'de' ? 'de' : 'es';
     var done = false, started = false;
-    var finish = function () { if (done) return; done = true; clearTimeout(watchTimer); if (onDone) onDone(); };
+    var next = function () { if (done) return; done = true; clearTimeout(watchTimer); speakNext(parts, idx + 1, run, onDone); };
     try {
       if (!voices.length) loadVoicesNow();
-      var u = new SpeechSynthesisUtterance(text);
-      var v = pickVoice();
-      if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = 'es-ES'; }
-      u.rate = parseFloat(rateEl.value) || 0.85;
+      var u = new SpeechSynthesisUtterance(plain(part.text));
+      var v = pickVoice(lang);
+      if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = lang === 'de' ? 'de-DE' : 'es-ES'; }
+      u.rate = lang === 'de' ? Math.min(1, (parseFloat(rateEl.value) || 0.85) + 0.1) : (parseFloat(rateEl.value) || 0.85);
       u.volume = 1;
       u.onstart = function () { started = true; if (/^Vorlesen/.test(statusEl.textContent)) setStatus(''); };
-      u.onend = finish;
+      u.onend = next;
       u.onerror = function (ev) {
         var code = ev && ev.error;
         if (code && code !== 'interrupted' && code !== 'canceled') {
-          setStatus('Vorlesen fehlgeschlagen (' + code + '). Prüfe in den Android-Einstellungen unter Sprachausgabe, ob Spanisch installiert ist.');
+          setStatus('Vorlesen fehlgeschlagen (' + code + '). Prüfe in den Android-Einstellungen unter Sprachausgabe, ob die Sprache installiert ist.');
         }
-        finish();
+        next();
       };
       try { synth.resume(); } catch (e) {}
       synth.speak(u);
-      // Startet die Ausgabe nicht, sag das statt still zu bleiben.
       watchTimer = setTimeout(function () {
         if (!started && !done) {
-          setStatus('Vorlesen startet nicht. Prüfe die Medienlautstärke und in den Android-Einstellungen unter Sprachausgabe, ob eine spanische Stimme installiert ist.');
+          setStatus('Vorlesen startet nicht. Prüfe die Medienlautstärke und in den Android-Einstellungen unter Sprachausgabe, ob eine ' + (lang === 'de' ? 'deutsche' : 'spanische') + ' Stimme installiert ist.');
           try { synth.cancel(); } catch (e) {}
-          finish();
+          done = true; if (onDone) onDone();
         }
       }, 4000);
-      if (!v) setStatus('Vorlesen … (keine spanische Stimme gefunden, das Gerät nutzt seine Standardstimme)');
     } catch (e) {
       setStatus('Vorlesen hat nicht geklappt.');
-      finish();
+      next();
     }
   }
   function loadVoicesNow() {
@@ -475,7 +492,7 @@ textarea {
   }
   $('testVoice').addEventListener('click', function () {
     unlockAudio();
-    speak('Hola, soy tu compañero de conversación. ¿Empezamos?');
+    speakParts([{ sprache: 'de', text: 'Hallo, ich bin deine Spanisch-Begleitung.' }, { sprache: 'es', text: '¡Hola! ¿Empezamos?' }]);
   });
 
   /* ---------- Anzeige ---------- */
@@ -496,17 +513,22 @@ textarea {
   function addBot(data) {
     var m = el('div', 'msg bot');
     var b = el('div', 'bubble');
-    b.appendChild(richText(el('p', 'es'), data.es));
-    var de = el('p', 'de', data.de || '');
+    var p = el('p', 'es');
+    (data.parts || []).forEach(function (part, i) {
+      if (i) p.appendChild(document.createTextNode(' '));
+      p.appendChild(richText(el('span', part.sprache === 'es' ? 'part-es' : 'part-de'), part.text));
+    });
+    b.appendChild(p);
+    var de = el('p', 'de', data.uebersetzung || '');
     de.hidden = true;
     b.appendChild(de);
     m.appendChild(b);
     var row = el('div', 'row');
     var sp = el('button', 'chip'); sp.type = 'button';
     sp.innerHTML = ICON_SPEAK + '<span>Vorlesen</span>';
-    sp.addEventListener('click', function () { unlockAudio(); speak(plain(data.es)); });
+    sp.addEventListener('click', function () { unlockAudio(); speakParts(data.parts); });
     row.appendChild(sp);
-    if (data.de) {
+    if (data.uebersetzung) {
       var tr = el('button', 'chip'); tr.type = 'button';
       tr.setAttribute('aria-expanded', 'false');
       tr.innerHTML = ICON_DE + '<span>Deutsch</span>';
@@ -550,13 +572,8 @@ textarea {
   function plain(text) { return String(text).replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*/g, ''); }
 
   /* ---------- Vokabeln: Liste und Lernstand (nur auf diesem Gerät) ---------- */
-  // Karteikasten: Fach 0 = neu, 1–5 = gelernt. Richtig rückt ein Fach vor, falsch zurück auf Fach 1.
-  var MIN = 60e3, DAY = 864e5;
-  var INTERVAL = [0, 10 * MIN, DAY, 3 * DAY, 7 * DAY, 21 * DAY];
-  var vocab = [];          // {i, k, es, de, h, t}  t: 0 = Kurs-Teil, 1 = Wörterbuch-Teil
+  var vocab = [];          // {i, k, es, de, h, t, l}
   var vocabById = {};
-  var srs = {};            // k -> {b, d, r, f}
-  var session = { r: 0, f: 0 };
 
   var ART_ES = { 'm': 'el', 'f': 'la', 'm.pl': 'los', 'f.pl': 'las', 'pl': 'los' };
   var ART_DE = { 'm': 'der', 'f': 'die', 'n': 'das', 'pl': 'die', 'm.pl': 'die', 'f.pl': 'die', 'n.pl': 'die' };
@@ -672,179 +689,348 @@ textarea {
     vocabById = {};
     vocab.forEach(function (v, i) { v.i = i; vocabById['v' + i] = v; });
   }
+
+  /* ---------- Gespeicherter Zustand (nur auf diesem Gerät) ---------- */
+  function readJSON(key, d) { try { var v = JSON.parse(store.get(key, '')); return v == null ? d : v; } catch (e) { return d; } }
+  function writeJSON(key, v) { try { localStorage.setItem('charlemos.' + key, JSON.stringify(v)); return true; } catch (e) { return false; } }
+
+  var kurs = null;                          // Kurspaket (Con gusto A1)
+  var profil = readJSON('profil', {});      // Lernerprofil aus dem Kennenlernen
+  var kursstand = readJSON('kursstand', { lektion: '' });
+  var cards = readJSON('fsrs', {});         // Wiederholungsplanung je Wort (FSRS)
+  var session = { n: 0, ok: 0 };
+
   function loadVocabStore() {
     try { vocab = JSON.parse(store.get('vocab', '[]')).map(function (a) { return { k: a[0].toLowerCase(), es: a[0], de: a[1], h: a[2] || '', t: a[3] || 0, l: a[4] || '' }; }); } catch (e) { vocab = []; }
-    try { srs = JSON.parse(store.get('srs', '{}')) || {}; } catch (e) { srs = {}; }
+    kurs = readJSON('kurs', null);
     indexVocab();
   }
   function saveVocab() {
-    try {
-      localStorage.setItem('charlemos.vocab', JSON.stringify(vocab.map(function (v) { return [v.es, v.de, v.h, v.t, v.l || '']; })));
-      return true;
-    } catch (e) { return false; }
+    return writeJSON('vocab', vocab.map(function (v) { return [v.es, v.de, v.h, v.t, v.l || '']; }));
   }
-  function saveSrs() { store.set('srs', JSON.stringify(srs)); }
+
+  /* ---------- FSRS-4.5, übertragen aus Poe V11 fsrs.py ---------- */
+  var FSRS = (function () {
+    var W = [0.4, 0.6, 2.4, 5.8, 4.93, 0.94, 0.86, 0.01, 1.49, 0.14, 0.94, 2.18, 0.05, 0.34, 1.26, 0.29, 2.61];
+    var ZIEL = 0.9, GRENZEN = [1.0, 3.0, 7.0, 21.0];
+    function clamp(x) { return Math.max(1.0, Math.min(10.0, x)); }
+    function r4(x) { return Math.round(x * 1e4) / 1e4; }
+    function initiale(g) {
+      g = Math.max(1, Math.min(4, g));
+      return { stabilitaet: W[g - 1], schwierigkeit: clamp(W[4] - Math.exp(W[5] * (g - 1)) + 1) };
+    }
+    function abrufbarkeit(s, t) { return s <= 0 ? 0 : Math.pow(1 + t / (9 * s), -1); }
+    function termin(s) { return s <= 0 ? 0 : 9 * s * (1 / ZIEL - 1); }
+    function bewerte(s, d, t, g) {
+      g = Math.max(1, Math.min(4, g));
+      var r = abrufbarkeit(s, t);
+      var d0 = W[4] - Math.exp(W[5] * 3) + 1;
+      var dn = clamp(W[7] * d0 + (1 - W[7]) * (d - W[6] * (g - 3)));
+      var sn;
+      if (g === 1) {
+        sn = W[11] * Math.pow(d, -W[12]) * (Math.pow(s + 1, W[13]) - 1) * Math.exp(W[14] * (1 - r));
+      } else {
+        var malus = g === 2 ? W[15] : 1, bonus = g === 4 ? W[16] : 1;
+        sn = s * (1 + Math.exp(W[8]) * (11 - d) * Math.pow(s, -W[9]) * (Math.exp(W[10] * (1 - r)) - 1) * malus * bonus);
+      }
+      sn = Math.max(0.1, sn);
+      return { stabilitaet: r4(sn), schwierigkeit: r4(dn), naechste_wiederholung_tage: Math.round(termin(sn) * 100) / 100, abrufbarkeit: r4(r) };
+    }
+    function fach(s) { for (var i = 0; i < GRENZEN.length; i++) if (s < GRENZEN[i]) return i + 1; return 5; }
+    return { initiale: initiale, bewerte: bewerte, termin: termin, fach: fach, abrufbarkeit: abrufbarkeit };
+  })();
+  window.CharlemosFSRS = FSRS;  // für Tests
+
+  var DAY = 864e5;
+  function rateCard(k, g, now) {
+    now = now || Date.now();
+    var c = cards[k];
+    if (!c) {
+      var ini = FSRS.initiale(g);
+      c = { s: ini.stabilitaet, d: ini.schwierigkeit, n: 1, f: g === 1 ? 1 : 0 };
+    } else {
+      var res = FSRS.bewerte(c.s, c.d, Math.max(0, (now - c.t) / DAY), g);
+      c.s = res.stabilitaet; c.d = res.schwierigkeit; c.n++; if (g === 1) c.f++;
+    }
+    c.t = now; c.due = now + FSRS.termin(c.s) * DAY;
+    cards[k] = c;
+    return c;
+  }
+  function fachOf(v) { var c = cards[v.k]; return c ? FSRS.fach(c.s) : 0; }
 
   function vocabStats() {
-    var learned = 0, course = 0;
-    vocab.forEach(function (v) { if (v.t === 0) course++; var s = srs[v.k]; if (s && s.b >= 2) learned++; });
-    return { total: vocab.length, course: course, learned: learned };
+    var learned = 0, due = 0, now = Date.now();
+    vocab.forEach(function (v) { var c = cards[v.k]; if (c && FSRS.fach(c.s) >= 3) learned++; if (c && c.due <= now) due++; });
+    return { total: vocab.length, learned: learned, due: due };
   }
   function showVocabState() {
     var st = vocabStats();
     var stateEl = $('vocabState');
-    if (!st.total) { stateEl.textContent = 'Noch keine Liste geladen. Erwartet wird eine Textdatei mit „Spanisch<Tab>Deutsch“ pro Zeile.'; $('resetVocab').hidden = true; return; }
-    stateEl.textContent = st.total.toLocaleString('de-DE') + ' Vokabeln geladen (' + st.course.toLocaleString('de-DE') + ' aus dem Kurs-Teil), ' +
-      st.learned.toLocaleString('de-DE') + ' davon sitzen schon. Sag im Gespräch „Ich möchte Vokabeln üben“.';
-    $('resetVocab').hidden = false;
+    var parts = [];
+    if (kurs) parts.push('Kurs „' + (kurs.titel || 'Con gusto A1') + '“ geladen (' + kurs.einheiten.length + ' Einheiten, ' + (kurs.lueckentexte || []).length + ' Lückentexte).');
+    if (!st.total) { parts.push('Noch keine Vokabeln. Lade das Kurspaket (.json) oder eine Liste (.txt/.csv).'); $('resetVocab').hidden = true; }
+    else {
+      parts.push(st.total.toLocaleString('de-DE') + ' Vokabeln, ' + st.learned.toLocaleString('de-DE') + ' sitzen schon, ' + st.due.toLocaleString('de-DE') + ' sind fällig.');
+      $('resetVocab').hidden = false;
+    }
+    if (kursstand.lektion) parts.push('Aktuelle Lektion: ' + lessonName(kursstand.lektion) + '.');
+    stateEl.textContent = parts.join(' ');
   }
 
-  // Wörter für die nächste Antwort: fällige zuerst, dann neue (Kurs-Teil vor Wörterbuch-Teil).
-  function practiceSet(n) {
-    var now = Date.now(), due = [], fresh = [];
-    vocab.forEach(function (v) {
-      var s = srs[v.k];
-      if (!s) fresh.push(v);
-      else if (s.d <= now) due.push(v);
-    });
-    due.sort(function (a, b) { return srs[a.k].d - srs[b.k].d; });
-    // Neue Wörter: Kurs-Teil zuerst, innerhalb davon nach Lektion, sonst in Listenreihenfolge.
-    fresh.sort(function (a, b) { return a.t - b.t || lessonNo(a.l) - lessonNo(b.l) || a.i - b.i; });
-    return due.slice(0, n).concat(fresh.slice(0, Math.max(0, n - due.length)));
-  }
   function lessonNo(l) {
     if (!l) return 999;
-    if (/bienvenid|_b$/i.test(l)) return 0;
+    if (/bienvenid|_b$|^b$/i.test(l)) return 0;
     var m = String(l).match(/\d+/);
     return m ? parseInt(m[0], 10) : 998;
   }
+  function lessonKey(l) { var n = lessonNo(l); return n === 0 ? 'B' : (n < 900 ? String(n) : ''); }
+  function lessonName(L) {
+    var e = kurs && kurs.einheiten.filter(function (x) { return x.lektion === L; })[0];
+    return e ? (L === 'B' ? '¡Bienvenidos!' : 'Lektion ' + L + ' „' + e.titel + '“') : 'Lektion ' + L;
+  }
+
+  // Wörter für die nächste Antwort: fällige zuerst, dann neue (aktuelle Lektion zuerst, sonst nach Lektion).
+  function practiceSet(n) {
+    var now = Date.now(), due = [], fresh = [], cur = kursstand.lektion;
+    vocab.forEach(function (v) {
+      var c = cards[v.k];
+      if (!c) fresh.push(v);
+      else if (c.due <= now) due.push(v);
+    });
+    due.sort(function (a, b) { return cards[a.k].due - cards[b.k].due; });
+    fresh.sort(function (a, b) {
+      var ca = cur && lessonKey(a.l) === cur ? 0 : 1, cb = cur && lessonKey(b.l) === cur ? 0 : 1;
+      return ca - cb || a.t - b.t || lessonNo(a.l) - lessonNo(b.l) || a.i - b.i;
+    });
+    return due.slice(0, n).concat(fresh.slice(0, Math.max(0, n - due.length)));
+  }
   function knownSet(n) {
-    var known = vocab.filter(function (v) { var s = srs[v.k]; return s && s.b >= 2; });
+    var known = vocab.filter(function (v) { return fachOf(v) >= 2; });
     for (var i = known.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var x = known[i]; known[i] = known[j]; known[j] = x; }
     return known.slice(0, n);
   }
   function vocabLine(v) {
-    var s = srs[v.k];
-    return 'v' + v.i + ' | ' + v.es + ' | ' + v.de + (v.h ? ' | Hinweis: ' + v.h : '') + (v.l ? ' | Lektion ' + v.l : '') + ' | Fach ' + (s ? s.b : 0);
+    return 'v' + v.i + ' | ' + v.es + ' | ' + v.de + (v.h ? ' | Hinweis: ' + v.h : '') + (v.l ? ' | Lektion ' + lessonKey(v.l) : '') + ' | Fach ' + fachOf(v);
   }
 
   function applyRatings(list) {
     if (!Array.isArray(list)) return;
-    var now = Date.now(), changed = false;
+    var changed = false;
     list.forEach(function (r) {
       var v = r && vocabById[String(r.id || '').trim()];
       if (!v) return;
-      var s = srs[v.k] || { b: 0, d: 0, r: 0, f: 0 };
-      if (r.richtig === true || r.richtig === 'true') {
-        s.b = s.b === 0 ? 2 : Math.min(s.b + 1, 5);
-        s.d = now + INTERVAL[s.b];
-        s.r++; session.r++;
-      } else {
-        s.b = 1;
-        s.d = now + 2 * MIN;
-        s.f++; session.f++;
-      }
-      srs[v.k] = s; changed = true;
+      var g = parseInt(r.note, 10);
+      if (!(g >= 1 && g <= 4)) g = (r.richtig === true || r.richtig === 'true') ? 3 : 1;
+      rateCard(v.k, g);
+      session.n++; if (g >= 3) session.ok++;
+      changed = true;
     });
     if (changed) {
-      saveSrs();
+      writeJSON('fsrs', cards);
       showVocabState();
-      setStatus('Vokabeln in dieser Sitzung: ' + session.r + ' richtig, ' + session.f + ' noch nicht.');
+      setStatus('Vokabeln in dieser Sitzung: ' + session.ok + ' von ' + session.n + ' gewusst.');
     }
   }
 
+  var PROFIL_FELDER = ['ziel', 'zielregion', 'varietaet', 'niveau', 'sitzungsdauer', 'modalitaet', 'rollenspiel', 'korrektur_stil', 'sprachanteil', 'andere_sprachen'];
+  function applyResult(data) {
+    applyRatings(data.bewertung);
+    var L = lessonKey(data.lektion);
+    if (L && kurs && kurs.einheiten.some(function (e) { return e.lektion === L; }) && L !== kursstand.lektion) {
+      kursstand.lektion = L; writeJSON('kursstand', kursstand); showVocabState();
+    }
+    if (data.profil && typeof data.profil === 'object') {
+      var ch = false;
+      PROFIL_FELDER.forEach(function (f) {
+        var v = data.profil[f];
+        if (v != null && String(v).trim() && String(v).trim() !== 'unbekannt') { profil[f] = String(v).trim().slice(0, 200); ch = true; }
+      });
+      if (ch) { profil.stand = new Date().toISOString().slice(0, 10); writeJSON('profil', profil); showProfil(); }
+    }
+  }
+  function showProfil() {
+    var keys = PROFIL_FELDER.filter(function (f) { return profil[f]; });
+    $('profilState').textContent = keys.length ? keys.map(function (f) { return f + ': ' + profil[f]; }).join(' · ') : 'Noch kein Profil. Es entsteht im Gespräch, wenn du das Kennenlernen möchtest.';
+    $('resetProfil').hidden = !keys.length;
+  }
+
+  /* ---------- Datei laden: Kurspaket (.json) oder Vokabelliste (.txt/.csv) ---------- */
   $('loadVocab').addEventListener('click', function () { $('vocabFile').click(); });
   $('vocabFile').addEventListener('change', function () {
     var f = this.files && this.files[0];
     if (!f) return;
     var reader = new FileReader();
     reader.onload = function () {
-      var list = parseVocabText(reader.result);
-      if (!list.length) { $('vocabState').textContent = 'In dieser Datei habe ich keine Zeilen „Spanisch<Tab>Deutsch“ gefunden.'; return; }
+      var txt = String(reader.result || '');
+      if (/^\s*\{/.test(txt)) {
+        var p = null;
+        try { p = JSON.parse(txt); } catch (e) {}
+        if (!p || p.format !== 'charlemos-kurs' || !Array.isArray(p.einheiten) || !Array.isArray(p.vokabeln)) {
+          $('vocabState').textContent = 'Diese JSON-Datei ist kein Charlemos-Kurspaket.'; return;
+        }
+        var titel = (p.quelle || '').indexOf('Con gusto') !== -1 ? 'Con gusto A1' : 'Kurs';
+        kurs = { titel: titel, einheiten: p.einheiten, lueckentexte: p.lueckentexte || [], grammatik: p.grammatik || [] };
+        vocab = p.vokabeln.map(function (a) { return { k: String(a[0]).toLowerCase(), es: a[0], de: a[1], h: '', t: 0, l: a[2] }; });
+        indexVocab();
+        if (!writeJSON('kurs', kurs) || !saveVocab()) { $('vocabState').textContent = 'Das Kurspaket ist zu groß für den Speicher dieses Browsers.'; return; }
+        showVocabState(); setStatus('Kurspaket geladen.');
+        return;
+      }
+      var list = parseVocabText(txt);
+      if (!list.length) { $('vocabState').textContent = 'In dieser Datei habe ich keine Vokabeln gefunden.'; return; }
       vocab = list; indexVocab();
       if (!saveVocab()) { $('vocabState').textContent = 'Die Liste ist zu groß für den Speicher dieses Browsers.'; return; }
-      showVocabState();
-      setStatus('Vokabelliste geladen.');
+      showVocabState(); setStatus('Vokabelliste geladen.');
     };
     reader.onerror = function () { $('vocabState').textContent = 'Die Datei ließ sich nicht lesen.'; };
     reader.readAsText(f, 'utf-8');
     this.value = '';
   });
-  var resetArmed = null;
-  $('resetVocab').addEventListener('click', function () {
-    var btn = this;
-    if (!resetArmed) {
-      btn.textContent = 'Wirklich zurücksetzen? Noch einmal tippen';
-      resetArmed = setTimeout(function () { resetArmed = null; btn.textContent = 'Lernstand zurücksetzen'; }, 4000);
-      return;
-    }
-    clearTimeout(resetArmed); resetArmed = null;
-    btn.textContent = 'Lernstand zurücksetzen';
-    srs = {}; saveSrs(); session = { r: 0, f: 0 };
-    showVocabState();
-    setStatus('Lernstand zurückgesetzt. Die Liste selbst bleibt.');
+  function twoTap(btn, label, action) {
+    var armed = null;
+    btn.addEventListener('click', function () {
+      if (!armed) {
+        btn.textContent = 'Wirklich? Noch einmal tippen';
+        armed = setTimeout(function () { armed = null; btn.textContent = label; }, 4000);
+        return;
+      }
+      clearTimeout(armed); armed = null; btn.textContent = label; action();
+    });
+  }
+  twoTap($('resetVocab'), 'Lernstand zurücksetzen', function () {
+    cards = {}; writeJSON('fsrs', cards); session = { n: 0, ok: 0 };
+    showVocabState(); setStatus('Lernstand zurückgesetzt. Liste und Kurs bleiben.');
+  });
+  twoTap($('resetProfil'), 'Profil löschen', function () {
+    profil = {}; writeJSON('profil', profil); showProfil(); setStatus('Profil gelöscht.');
   });
   loadVocabStore();
   showVocabState();
+  showProfil();
 
   /* ---------- Gespräch mit Claude ---------- */
   var turns = [];
   var busy = false;
 
+  function greeting() {
+    var hasProfil = PROFIL_FELDER.some(function (f) { return profil[f]; });
+    if (!hasProfil) {
+      return { parts: [
+        { sprache: 'es', text: '¡Hola!' },
+        { sprache: 'de', text: 'Schön, dass du da bist. Ich bin deine Spanisch-Begleitung. Wenn du magst, stelle ich dir zuerst ein paar kurze Fragen, damit ich mich auf dich einstellen kann. Wir können aber auch gleich loslegen: plaudern, eine Lektion aus Con gusto oder Vokabeln üben. Was möchtest du?' }
+      ], uebersetzung: '', korrektur: '', modus: 'gespraech' };
+    }
+    var tip = kursstand.lektion ? ' Zuletzt waren wir bei ' + lessonName(kursstand.lektion) + '.' : '';
+    return { parts: [
+      { sprache: 'es', text: '¡Hola de nuevo! ¿Qué tal?' },
+      { sprache: 'de', text: 'Worauf hast du heute Lust: plaudern, Lektion, Vokabeln oder eine Frage zur Grammatik?' + tip }
+    ], uebersetzung: 'Hallo, schön dich wiederzusehen! Wie geht es dir?', korrektur: '', modus: 'gespraech' };
+  }
+
   function startConversation() {
-    turns = [{ role: 'assistant', content: JSON.stringify(GREETING) }];
+    var g = greeting();
+    turns = [{ role: 'assistant', content: JSON.stringify(compact(g)) }];
     log.innerHTML = '';
     if (!getKey()) {
       var n = el('p', 'note', 'Trage zuerst oben unter Einstellungen deinen API-Schlüssel ein.');
       n.id = 'keyNote';
       log.appendChild(n);
       openSettings(true);
-    } else if (vocab.length) {
-      log.appendChild(el('p', 'note', 'Tipp: Sag einfach „Ich möchte Vokabeln üben“.'));
     }
-    addBot(GREETING);
+    addBot(g);
+  }
+  function compact(d) {
+    return { antwort: d.parts, uebersetzung: d.uebersetzung || '', korrektur: d.korrektur || '', modus: d.modus || '', frage_id: d.frage_id || '', lektion: d.lektion || '' };
   }
 
-  function vocabPrompt() {
-    if (!vocab.length) {
-      return ' Möchte der Lernende Vokabeln üben, sag ihm auf Deutsch im Feld "korrektur", dass er zuerst unter Einstellungen seine Vokabelliste laden soll, und übe bis dahin mit einfachen Alltagswörtern. ';
-    }
+  function stufe() {
+    // Niveau aus dem Profil (Kennenlernen) hat Vorrang vor der Einstellung.
+    var n = (profil.niveau || levelEl.value || 'A2').toLowerCase();
+    if (/b2/.test(n)) return 'B2';
+    if (/b1|fortgeschritten/.test(n)) return 'B1';
+    if (/a2|grundlagen/.test(n)) return 'A2';
+    if (/absolut|null|phrasen|anf|a1/.test(n)) return 'A1';
+    return 'A2';
+  }
+  function sprachRegel() {
+    var s = stufe(), a = (profil.sprachanteil || '').toLowerCase();
+    var base = s === 'A1'
+      ? 'Der Rahmen deiner Antworten ist Deutsch. Streue spanische Wörter, Wendungen und kurze Sätze ein und übersetze jeden spanischen Satz direkt danach kurz auf Deutsch. Niemals ein ganzer spanischer Absatz ohne deutsche Brücke.'
+      : 'Sprich überwiegend Spanisch in kurzen, klaren Sätzen auf Niveau ' + s + '. Erklärungen, Grammatik und Korrekturen gibst du auf Deutsch. Fülle das Feld "uebersetzung" mit der deutschen Übersetzung deiner spanischen Teile.';
+    if (/mehr.?span/.test(a)) base += ' Der Lernende möchte mehr Spanisch als üblich – erhöhe den spanischen Anteil.';
+    if (/mehr.?deut/.test(a)) base += ' Der Lernende möchte mehr Deutsch als üblich – erhöhe den deutschen Anteil.';
+    return base;
+  }
+
+  function profilText() {
+    var keys = PROFIL_FELDER.filter(function (f) { return profil[f]; });
+    var fehlt = ['ziel', 'zielregion', 'varietaet', 'niveau', 'sitzungsdauer', 'modalitaet', 'rollenspiel'].filter(function (f) { return !profil[f]; });
+    return 'LERNERPROFIL: ' + (keys.length ? keys.map(function (f) { return f + '=' + profil[f]; }).join('; ') : 'noch leer') + '.' +
+      (fehlt.length ? ' Noch offen: ' + fehlt.join(', ') + '.' : '');
+  }
+
+  function kursText() {
+    if (!kurs) return 'Es ist kein Kurspaket geladen. Wünscht der Lernende eine Lektion, sag ihm, dass er unter Einstellungen das Kurspaket laden kann. ';
+    var t = 'KURS: Con gusto A1. Einheiten: ' + kurs.einheiten.map(function (e) {
+      var anz = vocab.filter(function (v) { return lessonKey(v.l) === e.lektion; });
+      var gel = anz.filter(function (v) { return fachOf(v) >= 2; }).length;
+      return e.lektion + ' = ' + e.titel + ' (' + gel + '/' + anz.length + ' Wörter gelernt)';
+    }).join('; ') + '. ';
+    var L = kursstand.lektion;
+    var e = L && kurs.einheiten.filter(function (x) { return x.lektion === L; })[0];
+    if (!e) return t + 'Es ist noch keine Lektion gewählt. ';
+    var box = (e.boxen || []).map(function (b) { return b.text; }).join(' | ');
+    if (box.length > 2600) box = box.slice(0, 2600) + ' …';
+    var konj = (e.konjugationen || []).map(function (k) { return typeof k === 'string' ? k : JSON.stringify(k); }).join(' | ').slice(0, 900);
+    var dial = (e.dialoge || []).slice(0, 2).map(function (d) { return [].concat(d).join(' / '); }).join(' || ').slice(0, 900);
+    var luecken = (kurs.lueckentexte || []).map(function (x, i) { x._id = 'l' + i; return x; })
+      .filter(function (x) { return String(x.einheit) === L; }).slice(0, 8)
+      .map(function (x) { return x._id + ' | ' + x.satz + ' | Lösung: ' + x.loesung + ' | Hinweis: ' + (x.hinweis || ''); });
+    return t + 'AKTUELLE LEKTION ' + L + ': ' + e.titel + '. Lernziele: ' + (e.lernziele || []).join('; ') + '. ' +
+      (box ? 'Stoff aus dem Lehrbuch: ' + box + '. ' : '') +
+      (konj ? 'Konjugationen: ' + konj + '. ' : '') +
+      (dial ? 'Dialoge aus dem Buch: ' + dial + '. ' : '') +
+      (luecken.length ? '\nLückentexte dieser Lektion (Lösung erst nach der Antwort des Lernenden verraten):\n' + luecken.join('\n') + '\n' : '');
+  }
+
+  function vocabText() {
+    if (!vocab.length) return '';
     var practice = practiceSet(12), known = knownSet(6);
-    return ' Der Lernende hat eine eigene Vokabelliste. ' +
-      'VOKABELN ÜBEN: Möchte er Vokabeln üben oder abgefragt werden (z. B. „Ich möchte Vokabeln üben“, „frag mich Vokabeln ab“, „vamos a practicar vocabulario“; die Spracherkennung kann deutsche Sätze verstümmeln, deute sie wohlwollend), dann wechsle in den Übungsmodus und bleib darin, bis er etwas anderes will. ' +
-      'Im Übungsmodus fragst du in jeder Antwort genau ein Wort aus der Liste „Zum Üben“ ab, der Reihe nach, meist „¿Cómo se dice «deutsches Wort»?“, ab und zu umgekehrt („¿Qué significa «spanisches Wort»?“). ' +
-      'Die nächste Antwort des Lernenden bewertest du großzügig: Fehlt nur der Artikel oder ein Akzent, ist ein Erkennungsfehler offensichtlich oder nennt er ein gleichwertiges Wort, gilt sie als richtig; ein falsches Geschlecht erwähnst du nur. ' +
-      'Danach kurz und herzlich auf Spanisch Rückmeldung geben, das richtige Wort nennen, bei Bedarf einen sehr kurzen Beispielsatz, und sofort das nächste Wort abfragen. Bei einer falschen Antwort erklärst du im Feld "korrektur" auf Deutsch kurz das richtige Wort. ' +
-      'Wörter, die der Lernende von sich aus nicht weiß („no sé“, „weiß ich nicht“), zählen als falsch. ' +
-      'IM NORMALEN GESPRÄCH: Baue gelegentlich, höchstens ein bis zwei pro Antwort, Wörter aus „Schon gelernt“ natürlich ein, ohne sie abzufragen. ' +
-      'Markiere im Feld "es" jedes Wort aus seiner Liste mit doppelten Sternchen, z. B. **la tarta**. ' +
-      '\nZum Üben (id | spanisch | deutsch | Hinweis | Fach 0–5, 0 = neu):\n' + practice.map(vocabLine).join('\n') +
-      (known.length ? '\nSchon gelernt:\n' + known.map(vocabLine).join('\n') : '') + '\n';
+    return '\nVOKABELN zum Üben (id | spanisch | deutsch | Hinweis | Lektion | Fach 0–5, 0 = neu):\n' + practice.map(vocabLine).join('\n') +
+      (known.length ? '\nSchon gelernt (zum Einstreuen):\n' + known.map(vocabLine).join('\n') : '') + '\n';
   }
 
   function systemPrompt() {
-    return 'Du bist ein freundlicher, geduldiger Spanisch-Gesprächspartner für einen deutschsprachigen Erwachsenen, der Spanisch übt. ' +
-      'Sprachniveau des Lernenden: ' + levelEl.value + ' (GER). Passe Wortschatz und Satzbau genau an dieses Niveau an. ' +
-      'Führe ein natürliches Alltagsgespräch: antworte auf Spanisch in ein bis drei kurzen Sätzen und stelle am Ende eine einfache Rückfrage, die das Gespräch weiterführt. ' +
-      'Die Nachrichten des Lernenden stammen oft aus einer Spracherkennung; ignoriere fehlende Satzzeichen und Großschreibung und korrigiere nur echte sprachliche Fehler (Grammatik, Wortwahl, Konjugation). ' +
-      'Schreibt der Lernende auf Deutsch, zeig ihm in der Korrektur, wie man den Gedanken auf Spanisch sagt, und antworte trotzdem auf Spanisch. ' +
-      vocabPrompt() +
-      'Antworte ausschließlich mit einem JSON-Objekt, ohne Codeblock und ohne Text davor oder danach, mit genau diesen Feldern: ' +
-      '"es": deine Antwort auf Spanisch; ' +
-      '"de": die deutsche Übersetzung deiner Antwort; ' +
-      '"korrektur": wenn die letzte Nachricht des Lernenden Fehler enthält, eine kurze Erklärung auf Deutsch mit dem richtigen spanischen Satz, sonst ein leerer String; ' +
-      '"modus": "vokabeln" im Übungsmodus, sonst "gespraech"; ' +
-      '"frage_id": die id des Wortes, das du in dieser Antwort abfragst, sonst ein leerer String; ' +
-      '"bewertung": Liste der Bewertungen der letzten Antwort des Lernenden auf eine Vokabelfrage, z. B. [{"id": "v12", "richtig": true}], sonst [].';
+    return [
+      'Du bist eine warmherzige, geduldige Spanischlehrerin und Gesprächspartnerin für einen deutschsprachigen Erwachsenen. Du duzt ihn.',
+      'GRUNDSATZ: Der Lernende bestimmt, was gemacht wird. Du darfst und sollst Vorschläge machen – zum Beispiel die nächste Lektion, eine Wiederholung, eine Übung oder das Kennenlernen –, aber du setzt sie nur um, wenn er zustimmt oder selbst etwas wählt. Sein Wunsch geht immer vor deinem Plan. Biete bei offenen Situationen zwei, drei Möglichkeiten an und lass ihn wählen.',
+      'RÜCKMELDUNG HAT VORRANG: Sagt er etwas wie „zu schnell“, „zu schwer“, „anders erklären“, „Pause“, „genug für heute“ oder „lieber was anderes“, reagierst du zuerst darauf: bestätige kurz, was du verstanden hast, und handle danach. Ist die Rückmeldung mehrdeutig, frag kurz nach.',
+      'SPRACHE: ' + sprachRegel(),
+      'MÖGLICHKEITEN, jeweils nur auf Wunsch des Lernenden:',
+      '– Plaudern: natürliches Alltagsgespräch, am Ende eine einfache Rückfrage.',
+      '– Kennenlernen: Stelle die Fragen zum Profil (Ziel, Zielregion, Varietät europäisch/lateinamerikanisch/neutral, Niveau, Zeit pro Sitzung, Lieblingsform lesen/hören/sprechen/schreiben/gemischt, Offenheit für Rollenspiele, Korrekturstil sanft/direkt) – eine Frage pro Antwort. Trage nur Werte ins Feld "profil" ein, die er selbst gesagt hat. Einen schon gespeicherten Wert änderst du nur, wenn er es ausdrücklich möchte oder zugestimmt hat. Am Ende fasst du das Profil in einem Satz zusammen und fragst, ob es passt.',
+      '– Kurs: eine Lektion aus Con gusto in kleinen Schritten – Lernziele nennen, Wörter, Grammatik, Dialog, Lückentext, kleine Szene. Immer nur ein Schritt pro Antwort, dann fragst du, ob er weiter will. Wählt er eine Lektion, trägst du deren Kennung (B oder 1–12) ins Feld "lektion" ein. Im Kurs bleibst du beim A1-Stoff des Buchs; liegt eine Frage darüber, sag das freundlich und nenne den passenden A1-Vorläufer.',
+      '– Erklären (Zweitlehrerin): Versteht er etwas nicht, erkläre es anders als das Buch. Wähle einen Blickwinkel und nenne ihn am Anfang: Analogie zum Deutschen, Gegenbeispiel, Schritt für Schritt, Beispielreihe, Anwendungsszene, Merksatz/Eselsbrücke oder Verweis auf eine spätere Lektion. Biete am Ende einen anderen Blickwinkel an. Höchstens fünf Sätze.',
+      '– Vokabeln üben: Frage pro Antwort genau ein Wort aus „VOKABELN zum Üben“ ab, meist „¿Cómo se dice «deutsches Wort»?“, ab und zu umgekehrt. Bewerte seine nächste Antwort großzügig (fehlender Artikel oder Akzent, offensichtlicher Erkennungsfehler oder gleichwertiges Wort gilt als richtig; falsches Geschlecht nur erwähnen) mit einer Note im Feld "bewertung": 1 = nicht gewusst oder falsch, 2 = mit Mühe oder Hilfe, 3 = richtig, 4 = sofort und sicher. Danach kurz Rückmeldung, richtiges Wort, bei Bedarf ein sehr kurzer Beispielsatz und gleich das nächste Wort – bis er etwas anderes möchte.',
+      '– Lückentext: Stelle einen Satz aus der Liste der aktuellen Lektion, warte auf seine Antwort, verrate die Lösung erst danach und erkläre sie kurz mit dem Hinweis.',
+      'Im normalen Gespräch streust du gelegentlich, höchstens ein bis zwei pro Antwort, Wörter aus „Schon gelernt“ ein. Wörter aus seiner Liste markierst du mit doppelten Sternchen, z. B. **la tarta**. Sonst keine Formatierung.',
+      'KORREKTUR: ' + ((profil.korrektur_stil || '').indexOf('direkt') !== -1 ? 'direkt und knapp.' : 'sanft und ermutigend („Fast! Es heißt …“).') + ' Seine Nachrichten stammen oft aus einer Spracherkennung: ignoriere fehlende Satzzeichen und Großschreibung, deute verstümmelte deutsche Sätze wohlwollend und korrigiere nur echte sprachliche Fehler (im Feld "korrektur", auf Deutsch).',
+      'GRENZEN: Halte dich kurz – höchstens zwei kurze Absätze, eine Frage oder Aufgabe pro Antwort. Erfinde keine Fakten; Datum, Uhrzeit, Wetter oder Nachrichten kannst du hier nicht nachsehen – sag das ehrlich.',
+      profilText(),
+      kursText(),
+      vocabText(),
+      'ANTWORTFORMAT: ausschließlich ein JSON-Objekt, ohne Codeblock und ohne Text davor oder danach:',
+      '{"antwort":[{"sprache":"de" oder "es","text":"..."}, ...], "uebersetzung":"deutsche Übersetzung der spanischen Teile oder leer", "korrektur":"kurz auf Deutsch oder leer", "modus":"gespraech|kennenlernen|kurs|erklaeren|vokabeln|lueckentext", "frage_id":"id des gerade abgefragten Wortes oder leer", "bewertung":[{"id":"v12","note":3}] oder [], "lektion":"B, 1–12 oder leer", "profil":{"feld":"wert"} oder {}}',
+      'Teile "antwort" so auf, dass jeder Teil nur eine Sprache enthält (spanische Wörter mitten im deutschen Satz dürfen im deutschen Teil bleiben). Erlaubte Profilfelder: ' + PROFIL_FELDER.join(', ') + '.'
+    ].join('\n');
   }
 
   function buildMessages() {
     var list = turns.slice(-MAX_TURNS);
     while (list.length && list[0].role !== 'user') list.shift();
-    // Die erste Nachricht muss vom Lernenden kommen; die Begrüßung wird als Kontext vorangestellt.
     if (list.length) {
       list = list.slice();
-      list[0] = { role: 'user', content: '(Du hast das Gespräch begonnen mit: "' + GREETING.es + '")\n\n' + list[0].content };
+      list[0] = { role: 'user', content: '(Du hast das Gespräch begonnen mit: ' + turns[0].content + ')\n\n' + list[0].content };
     }
     return list;
   }
@@ -856,15 +1042,23 @@ textarea {
     if (start !== -1 && end > start) {
       try {
         var v = JSON.parse(t.slice(start, end + 1));
-        if (v && v.es) return {
-          es: String(v.es), de: String(v.de || ''), korrektur: String(v.korrektur || ''),
-          modus: String(v.modus || 'gespraech'), frage_id: String(v.frage_id || ''),
-          bewertung: Array.isArray(v.bewertung) ? v.bewertung : []
+        var parts = [];
+        if (Array.isArray(v.antwort)) {
+          v.antwort.forEach(function (p) {
+            if (p && p.text) parts.push({ sprache: p.sprache === 'es' ? 'es' : 'de', text: String(p.text) });
+          });
+        } else if (v.es) {
+          parts.push({ sprache: 'es', text: String(v.es) });
+        }
+        if (parts.length) return {
+          parts: parts, uebersetzung: String(v.uebersetzung || v.de || ''), korrektur: String(v.korrektur || ''),
+          modus: String(v.modus || ''), frage_id: String(v.frage_id || ''),
+          bewertung: Array.isArray(v.bewertung) ? v.bewertung : [], lektion: String(v.lektion || ''),
+          profil: v.profil && typeof v.profil === 'object' ? v.profil : {}
         };
       } catch (e) {}
     }
-    // Notlösung: Klartext als spanische Antwort nehmen.
-    return t ? { es: t, de: '', korrektur: '' } : null;
+    return t ? { parts: [{ sprache: 'de', text: t }], uebersetzung: '', korrektur: '' } : null;
   }
 
   function explainError(status, body) {
@@ -875,7 +1069,7 @@ textarea {
     if (status === 429) return 'Gerade zu viele Anfragen. Warte einen Moment und sende noch einmal.';
     if (status === 529 || status === 503) return 'Claude ist gerade überlastet. Versuch es gleich noch einmal.';
     if (/credit balance/i.test(msg)) return 'Das API-Guthaben ist aufgebraucht oder noch nicht verknüpft. Prüfe in claude.ai unter Einstellungen > Abrechnung die API-Credits.';
-    return 'Die Antwort hat nicht geklappt' + (msg ? ': ' + msg : '.') ;
+    return 'Die Antwort hat nicht geklappt' + (msg ? ': ' + msg : '.');
   }
 
   async function ask() {
@@ -889,7 +1083,7 @@ textarea {
       },
       body: JSON.stringify({
         model: modelEl.value || 'claude-sonnet-5-5',
-        max_tokens: 700,
+        max_tokens: 1000,
         system: systemPrompt(),
         messages: buildMessages()
       })
@@ -921,11 +1115,11 @@ textarea {
       var data = await ask();
       pending.remove();
       if (!data) throw new Error('Die Antwort war leer. Schick deine Nachricht bitte noch einmal.');
-      turns.push({ role: 'assistant', content: JSON.stringify(data) });
-      applyRatings(data.bewertung);
+      turns.push({ role: 'assistant', content: JSON.stringify(compact(data)) });
+      applyResult(data);
       addBot(data);
       if (autoSpeakEl.checked) {
-        speak(plain(data.es), function () { if (handsFreeEl.checked) startListening(); });
+        speakParts(data.parts, function () { if (handsFreeEl.checked) startListening(); });
       } else if (handsFreeEl.checked) {
         startListening();
       }
