@@ -18,6 +18,8 @@ Kleine Web-App zum Spanischüben mit Claude: sprechen, hören, schreiben.
 2. Über das Zahnrad den Anthropic-API-Schlüssel eintragen. Er wird nur im Browser
    dieses Geräts gespeichert (localStorage) und steht nirgends im Code.
 3. Über „Zum Startbildschirm hinzufügen" als App ablegen.
+4. Optional: Kurspaket (.json) oder Vokabelliste (.txt/.csv) über „Datei laden“ einlesen.
+   Kursmaterial ist Verlagsmaterial und gehört nicht in dieses Repository.
 
 Die App ruft die Claude-API direkt aus dem Browser auf
 (`anthropic-dangerous-direct-browser-access`). Abgerechnet wird über die
