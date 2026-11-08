@@ -250,7 +250,7 @@ textarea {
     <div class="field">
       <span>Kurspaket oder Vokabelliste (bleibt nur auf diesem Gerät)</span>
       <div class="row">
-        <input id="vocabFile" type="file" accept=".json,.txt,.csv,application/json,text/plain,text/csv" hidden>
+        <input id="vocabFile" type="file" hidden>
         <button class="btn ghost" id="loadVocab" type="button">Datei laden …</button>
         <button class="btn ghost" id="resetVocab" type="button" hidden>Lernstand zurücksetzen</button>
       </div>
@@ -467,7 +467,14 @@ textarea {
         if (sent) chunks.push({ sprache: guessLang(sent, p.sprache), text: sent });
       });
     });
-    parts = chunks;
+    // Gleiche Sprache hintereinander wieder zusammenfassen (bis ca. 220 Zeichen): jede neue Ausgabe kostet auf Android eine Pause.
+    var merged = [];
+    chunks.forEach(function (c) {
+      var last = merged[merged.length - 1];
+      if (last && last.sprache === c.sprache && last.text.length + c.text.length < 220) last.text += ' ' + c.text;
+      else merged.push({ sprache: c.sprache, text: c.text });
+    });
+    parts = merged;
     clearTimeout(speakTimer); clearTimeout(watchTimer);
     var run = ++speakRun;
     var busyNow = false;
@@ -914,12 +921,13 @@ textarea {
     if (!f) return;
     var reader = new FileReader();
     reader.onload = function () {
-      var txt = String(reader.result || '');
+      var txt = String(reader.result || '').replace(/^\uFEFF/, '');
+      setStatus('Datei „' + f.name + '“ gelesen (' + Math.round(txt.length / 1024) + ' KB).');
       if (/^\s*\{/.test(txt)) {
         var p = null;
         try { p = JSON.parse(txt); } catch (e) {}
         if (!p || p.format !== 'charlemos-kurs' || !Array.isArray(p.einheiten) || !Array.isArray(p.vokabeln)) {
-          $('vocabState').textContent = 'Diese JSON-Datei ist kein Charlemos-Kurspaket.'; return;
+          $('vocabState').textContent = 'Die Datei „' + f.name + '“ ist kein Charlemos-Kurspaket' + (p ? '' : ' (sie lässt sich nicht als JSON lesen – ist sie vollständig heruntergeladen?)') + '.'; return;
         }
         var titel = (p.quelle || '').indexOf('Con gusto') !== -1 ? 'Con gusto A1' : 'Kurs';
         kurs = { titel: titel, einheiten: p.einheiten, lueckentexte: p.lueckentexte || [], grammatik: p.grammatik || [] };
