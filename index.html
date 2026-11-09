@@ -276,8 +276,25 @@ textarea {
           <option value="claude-haiku-5-5">Haiku (schneller, günstiger)</option>
         </select>
       </label>
-      <label class="field" for="voice"><span>Stimme</span>
-        <select id="voice"><option value="">Automatisch (Spanisch)</option></select>
+      <label class="field" for="klang"><span>Stimmcharakter</span>
+        <select id="klang">
+          <option value="natuerlich" selected>Natürlich</option>
+          <option value="bord">Ruhige Bordstimme</option>
+        </select>
+      </label>
+      <label class="field" for="pitch"><span>Stimmlage</span>
+        <select id="pitch">
+          <option value="0.8">tiefer</option>
+          <option value="0.9">etwas tiefer</option>
+          <option value="1" selected>normal</option>
+          <option value="1.1">etwas höher</option>
+        </select>
+      </label>
+      <label class="field" for="voice"><span>Spanische Stimme</span>
+        <select id="voice"><option value="">Automatisch</option></select>
+      </label>
+      <label class="field" for="voiceDe"><span>Deutsche Stimme</span>
+        <select id="voiceDe"><option value="">Automatisch</option></select>
       </label>
       <label class="field" for="rate"><span>Sprechtempo</span>
         <select id="rate">
@@ -296,6 +313,7 @@ textarea {
     <label class="check" for="autoSpeak"><input type="checkbox" id="autoSpeak" checked> Antworten automatisch vorlesen</label>
     <label class="check" for="autoSend"><input type="checkbox" id="autoSend" checked> Nach dem Sprechen automatisch senden</label>
     <label class="check" for="handsFree"><input type="checkbox" id="handsFree"> Gesprächsmodus: nach jeder Antwort wieder zuhören</label>
+    <p class="hint">Zeigt die Liste nur eine Stimme je Sprache, wähle die Stimme in den Android-Einstellungen: Bedienungshilfen → Sprachausgabe → Zahnrad beim Google-Sprachdienst → „Sprachdaten installieren“.</p>
     <button class="btn ghost" id="testVoice" type="button">Stimme testen</button>
   </section>
 
@@ -330,7 +348,7 @@ textarea {
   var log = $('log'), input = $('input'), sendBtn = $('send'), micBtn = $('mic'), statusEl = $('status');
   var settings = $('settings'), toggleSettings = $('toggleSettings');
   var apiKeyEl = $('apiKey'), keyState = $('keyState');
-  var levelEl = $('level'), modelEl = $('model'), voiceEl = $('voice'), rateEl = $('rate'), micLangEl = $('micLang');
+  var levelEl = $('level'), modelEl = $('model'), voiceEl = $('voice'), voiceDeEl = $('voiceDe'), pitchEl = $('pitch'), klangEl = $('klang'), rateEl = $('rate'), micLangEl = $('micLang');
   var autoSpeakEl = $('autoSpeak'), autoSendEl = $('autoSend'), handsFreeEl = $('handsFree');
 
   var ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>';
@@ -348,6 +366,10 @@ textarea {
     levelEl.value = store.get('level', levelEl.value);
     modelEl.value = store.get('model', modelEl.value);
     rateEl.value = store.get('rate', rateEl.value);
+    pitchEl.value = store.get('pitch', pitchEl.value);
+    klangEl.value = store.get('klang', klangEl.value);
+    if (!pitchEl.value) pitchEl.value = '1';
+    if (!klangEl.value) klangEl.value = 'natuerlich';
     micLangEl.value = store.get('micLang', micLangEl.value);
     autoSpeakEl.checked = store.get('autoSpeak', '1') === '1';
     autoSendEl.checked = store.get('autoSend', '1') === '1';
@@ -359,7 +381,14 @@ textarea {
   }
   restoreSettings();
   bindSetting(levelEl, 'level'); bindSetting(modelEl, 'model'); bindSetting(rateEl, 'rate');
-  bindSetting(micLangEl, 'micLang'); bindSetting(voiceEl, 'voice');
+  bindSetting(micLangEl, 'micLang'); bindSetting(voiceEl, 'voice'); bindSetting(voiceDeEl, 'voiceDe');
+  bindSetting(pitchEl, 'pitch'); bindSetting(klangEl, 'klang');
+  // Voreinstellung „Ruhige Bordstimme“: etwas tiefer, ruhig, beide Sprachen im gleichen Tempo.
+  klangEl.addEventListener('change', function () {
+    if (klangEl.value === 'bord') { pitchEl.value = '0.9'; rateEl.value = '0.85'; }
+    else { pitchEl.value = '1'; }
+    store.set('pitch', pitchEl.value); store.set('rate', rateEl.value);
+  });
   // Sprache, die das Mikrofon erwartet. Claude stellt sie nach jeder Antwort passend ein; der Knopf schaltet von Hand um.
   function setMicLang(code) {
     micLangEl.value = code === 'de' ? 'de-DE' : 'es-ES';
@@ -401,22 +430,25 @@ textarea {
     return voices.filter(function (v) { return (v.lang || '').toLowerCase().replace('_', '-').indexOf(prefix) === 0; });
   }
   function spanishVoices() { return langVoices('es'); }
-  function fillVoices() {
-    try { voices = synth ? synth.getVoices() : []; } catch (e) { voices = []; }
-    var saved = store.get('voice', '');
-    var list = spanishVoices();
-    voiceEl.innerHTML = '';
+  function fillVoiceSelect(sel, key, list) {
+    var saved = store.get(key, '');
+    sel.innerHTML = '';
     var auto = document.createElement('option');
-    auto.value = ''; auto.textContent = 'Automatisch (Spanisch)';
-    voiceEl.appendChild(auto);
+    auto.value = ''; auto.textContent = 'Automatisch';
+    sel.appendChild(auto);
     list.forEach(function (v) {
       var o = document.createElement('option');
       o.value = v.voiceURI || v.name;
       o.textContent = v.name + ' (' + v.lang + ')';
-      voiceEl.appendChild(o);
+      sel.appendChild(o);
     });
-    voiceEl.value = saved;
-    if (voiceEl.value !== saved) voiceEl.value = '';
+    sel.value = saved;
+    if (sel.value !== saved) sel.value = '';
+  }
+  function fillVoices() {
+    try { voices = synth ? synth.getVoices() : []; } catch (e) { voices = []; }
+    fillVoiceSelect(voiceEl, 'voice', spanishVoices());
+    fillVoiceSelect(voiceDeEl, 'voiceDe', langVoices('de'));
   }
   if (synth) {
     fillVoices();
@@ -426,6 +458,10 @@ textarea {
     if (lang === 'de') {
       var dl = langVoices('de');
       dl = dl.filter(function (v) { return v.localService; }).concat(dl.filter(function (v) { return !v.localService; }));
+      var wantDe = voiceDeEl.value;
+      if (wantDe) {
+        for (var d = 0; d < dl.length; d++) if ((dl[d].voiceURI || dl[d].name) === wantDe) return dl[d];
+      }
       for (var k = 0; k < dl.length; k++) if (dl[k].lang.toLowerCase().replace('_', '-') === 'de-de') return dl[k];
       return dl[0] || null;
     }
@@ -514,7 +550,10 @@ textarea {
       var v = mode === 0 ? pickVoice(lang) : null;
       if (v) { u.voice = v; u.lang = v.lang; }
       else if (mode <= 1) { u.lang = lang === 'de' ? 'de-DE' : 'es-ES'; }
-      u.rate = lang === 'de' ? Math.min(1, (parseFloat(rateEl.value) || 0.85) + 0.1) : (parseFloat(rateEl.value) || 0.85);
+      var baseRate = parseFloat(rateEl.value) || 0.85;
+      // Bordstimme: gleichmäßig und etwas gemessener, Deutsch und Spanisch im selben Tempo.
+      u.rate = klangEl.value === 'bord' ? baseRate * 0.95 : (lang === 'de' ? Math.min(1, baseRate + 0.1) : baseRate);
+      u.pitch = parseFloat(pitchEl.value) || 1;
       u.volume = 1;
       u.onstart = function () {
         started = true;
