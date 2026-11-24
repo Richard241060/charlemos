@@ -1058,6 +1058,7 @@ textarea {
 
   /* ---------- Gespräch mit Claude ---------- */
   var turns = [];
+  var voiceAlts = [], voiceText = '', lastFrageId = '';
   var busy = false;
 
   function greeting() {
@@ -1164,7 +1165,7 @@ textarea {
       '– Vokabeln üben: Möchte er Wörter aus bestimmten Lektionen („aus Lektion 3 und 5“) oder wieder aus allen, trägst du das ins Feld "vokabel_bereich" ein ("3,5" bzw. "alle") und bestätigst es kurz; die passende Liste bekommst du ab der nächsten Antwort. Sonst lässt du das Feld leer. Frage pro Antwort genau ein Wort aus „VOKABELN zum Üben“ ab, meist „¿Cómo se dice «deutsches Wort»?“, ab und zu umgekehrt. Bewerte seine nächste Antwort großzügig (fehlender Artikel oder Akzent, offensichtlicher Erkennungsfehler oder gleichwertiges Wort gilt als richtig; falsches Geschlecht nur erwähnen) mit einer Note im Feld "bewertung": 1 = nicht gewusst oder falsch, 2 = mit Mühe oder Hilfe, 3 = richtig, 4 = sofort und sicher. Danach kurz Rückmeldung, richtiges Wort, bei Bedarf ein sehr kurzer Beispielsatz und gleich das nächste Wort – bis er etwas anderes möchte.',
       '– Lückentext: Stelle einen Satz aus der Liste der aktuellen Lektion, warte auf seine Antwort, verrate die Lösung erst danach und erkläre sie kurz mit dem Hinweis.',
       'Im normalen Gespräch streust du gelegentlich, höchstens ein bis zwei pro Antwort, Wörter aus „Schon gelernt“ ein. Wörter aus seiner Liste markierst du mit doppelten Sternchen, z. B. **la tarta**. Sonst keine Formatierung.',
-      'KORREKTUR: ' + ((profil.korrektur_stil || '').indexOf('direkt') !== -1 ? 'direkt und knapp.' : 'sanft und ermutigend („Fast! Es heißt …“).') + ' Seine Nachrichten stammen oft aus einer Spracherkennung: ignoriere fehlende Satzzeichen und Großschreibung, deute verstümmelte deutsche Sätze wohlwollend und korrigiere nur echte sprachliche Fehler (im Feld "korrektur", auf Deutsch).',
+      'KORREKTUR: ' + ((profil.korrektur_stil || '').indexOf('direkt') !== -1 ? 'direkt und knapp.' : 'sanft und ermutigend („Fast! Es heißt …“).') + ' Seine Nachrichten stammen oft aus einer Spracherkennung: ignoriere fehlende Satzzeichen und Großschreibung, deute verstümmelte deutsche Sätze wohlwollend und korrigiere nur echte sprachliche Fehler (im Feld "korrektur", auf Deutsch). Steht unter seiner Nachricht „[Spracherkennung – auch möglich: …]“, sind das weitere Vermutungen der Erkennung: Nimm die Variante, die im Zusammenhang am besten passt (beim Abfragen: die richtige Lösung, wenn sie dabei ist), und werte eine falsche Erkennung nicht als Fehler des Lernenden. Den Hinweis selbst erwähnst du nicht.',
       'GRENZEN: Halte dich kurz – höchstens zwei kurze Absätze, eine Frage oder Aufgabe pro Antwort. Erfinde keine Fakten; Datum, Uhrzeit, Wetter oder Nachrichten kannst du hier nicht nachsehen – sag das ehrlich.',
       profilText(),
       kursText(),
@@ -1261,7 +1262,13 @@ textarea {
     sendBtn.disabled = true;
     input.value = '';
     setStatus('');
-    turns.push({ role: 'user', content: text });
+    var zusatz = '';
+    if (voiceAlts.length && voiceText && text === voiceText) {
+      var andere = voiceAlts.filter(function (a) { return a !== text; }).slice(0, 4);
+      if (andere.length) zusatz = '\n[Spracherkennung – auch möglich: ' + andere.join(' | ') + ']';
+    }
+    voiceAlts = []; voiceText = '';
+    turns.push({ role: 'user', content: text + zusatz });
     addUser(text);
     var pending = addPending();
     try {
@@ -1270,6 +1277,7 @@ textarea {
       if (!data) throw new Error('Die Antwort war leer. Schick deine Nachricht bitte noch einmal.');
       turns.push({ role: 'assistant', content: JSON.stringify(compact(data)) });
       applyResult(data);
+      lastFrageId = data.frage_id || '';
       addBot(data);
       if (autoSpeakEl.checked) {
         speakParts(data.parts, function () { if (handsFreeEl.checked) startListening(); });
@@ -1296,10 +1304,30 @@ textarea {
 
   /* ---------- Spracheingabe ---------- */
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var rec = null, listening = false, finalText = '', cancelled = false;
+  var rec = null, listening = false, finalText = '', cancelled = false, silenceTimer = null;
+  var STILLE_MS = 2500;   // so lange darf er nach dem Sprechen nachdenken, bevor gesendet wird
+
+  // Vergleichsform: klein, ohne Akzente, Satzzeichen und Artikel.
+  function vergleich(t) {
+    return String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-zäöüß0-9 ]+/g, ' ').replace(/\b(el|la|los|las|un|una|unos|unas|der|die|das|ein|eine)\b/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+  }
+  // Fragt Claude gerade ein Wort ab und ist die Lösung unter den Vermutungen, nimm genau diese.
+  function passendeVermutung(alts) {
+    var v = lastFrageId && vocabById[String(lastFrageId).trim()];
+    if (!v) return '';
+    var ziele = [vergleich(v.es), vergleich(v.de)].filter(Boolean);
+    for (var i = 0; i < alts.length; i++) {
+      var a = vergleich(alts[i]);
+      for (var j = 0; j < ziele.length; j++) if (a === ziele[j] || (' ' + a + ' ').indexOf(' ' + ziele[j] + ' ') !== -1) return alts[i];
+    }
+    return '';
+  }
 
   function stopListening(silent) {
     cancelled = !!silent;
+    clearTimeout(silenceTimer);
     if (rec && listening) { try { rec.stop(); } catch (e) {} }
     listening = false;
     micBtn.setAttribute('aria-pressed', 'false');
@@ -1316,21 +1344,44 @@ textarea {
       rec = new SR();
       rec.lang = micLangEl.value;
       rec.interimResults = true;
-      rec.continuous = false;
-      rec.maxAlternatives = 1;
+      // Weiter zuhören, auch wenn er kurz stockt; beendet wird durch Antippen oder längere Stille.
+      rec.continuous = true;
+      rec.maxAlternatives = 5;
       var base = input.value.trim() ? input.value.trim() + ' ' : '';
-      finalText = '';
+      finalText = ''; voiceAlts = []; voiceText = '';
       cancelled = false;
       rec.onresult = function (ev) {
-        var interim = '', fin = '';
+        clearTimeout(silenceTimer);
+        var fin = '', interim = '', lastAlts = [], lastSeg = '', prefix = '';
         for (var i = 0; i < ev.results.length; i++) {
-          if (ev.results[i].isFinal) fin += ev.results[i][0].transcript;
-          else interim += ev.results[i][0].transcript;
+          var r = ev.results[i], t = (r[0] && r[0].transcript || '').trim();
+          if (!t) continue;
+          if (r.isFinal) {
+            // Manche Android-Versionen wiederholen im Dauer-Modus den ganzen bisherigen Text: nicht doppelt anhängen.
+            var nf = vergleich(fin), nt = vergleich(t);
+            if (nf && nt.indexOf(nf) === 0) { prefix = ''; fin = t; }
+            else if (nf && (nf === nt || nf.slice(-nt.length) === nt)) { continue; }
+            else { prefix = fin ? fin + ' ' : ''; fin = prefix + t; }
+            lastSeg = t;
+            lastAlts = [];
+            for (var j = 0; j < r.length; j++) { var at = (r[j].transcript || '').trim(); if (at && lastAlts.indexOf(prefix + at) === -1) lastAlts.push(prefix + at); }
+          } else {
+            interim += (interim ? ' ' : '') + t;
+          }
         }
         finalText = fin;
-        input.value = base + fin + interim;
+        if (lastAlts.length) {
+          var treffer = passendeVermutung(lastAlts);
+          if (treffer) { fin = treffer; finalText = fin; lastAlts = [treffer].concat(lastAlts.filter(function (a) { return a !== treffer; })); }
+          voiceAlts = lastAlts.map(function (a) { return (base + a).trim(); });
+        }
+        input.value = base + fin + (interim ? (fin ? ' ' : '') + interim : '');
+        voiceText = (base + fin).trim();
+        // Nach dem letzten Wort noch etwas Bedenkzeit lassen, dann selbst beenden.
+        silenceTimer = setTimeout(function () { if (listening) { try { rec.stop(); } catch (e) {} } }, interim ? STILLE_MS + 1500 : STILLE_MS);
       };
       rec.onerror = function (ev) {
+        clearTimeout(silenceTimer);
         listening = false;
         micBtn.setAttribute('aria-pressed', 'false');
         if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
@@ -1346,15 +1397,18 @@ textarea {
         }
       };
       rec.onend = function () {
+        clearTimeout(silenceTimer);
         listening = false;
         micBtn.setAttribute('aria-pressed', 'false');
-        if (statusEl.textContent === 'Ich höre zu …') setStatus('');
+        if (/^Ich höre zu/.test(statusEl.textContent)) setStatus('');
+        // Was noch als Zwischenstand im Feld steht, gilt beim Beenden als gesagt.
+        if (!finalText.trim() && input.value.trim() !== base.trim()) { finalText = input.value.trim(); voiceText = finalText; }
         if (!cancelled && autoSendEl.checked && input.value.trim() && finalText.trim()) send();
       };
       rec.start();
       listening = true;
       micBtn.setAttribute('aria-pressed', 'true');
-      setStatus('Ich höre zu …');
+      setStatus('Ich höre zu … Wenn du fertig bist: kurz still sein oder aufs Mikrofon tippen.');
     } catch (e) {
       listening = false;
       micBtn.setAttribute('aria-pressed', 'false');
