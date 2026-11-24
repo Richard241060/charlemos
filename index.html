@@ -154,6 +154,9 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .es strong { color: var(--accent); font-weight: 700; }
 .part-de { font-family: var(--font-body); font-weight: 400; font-size: 1.02rem; }
 .part-es { color: var(--ink); }
+.erkl { margin: 0 0 8px; color: var(--muted); font-size: .92em; line-height: 1.45; }
+.erkl:last-child { margin-bottom: 0; }
+.bubble p.es { margin: 0; font-weight: 500; }
 .de { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); }
 .fix { background: var(--warn-bg); color: var(--warn-ink); border-radius: 8px; padding: 8px 12px; font-size: 0.95rem; }
 .fix strong { font-weight: 600; }
@@ -313,6 +316,7 @@ textarea {
     <label class="check" for="autoSpeak"><input type="checkbox" id="autoSpeak" checked> Antworten automatisch vorlesen</label>
     <label class="check" for="autoSend"><input type="checkbox" id="autoSend" checked> Nach dem Sprechen automatisch senden</label>
     <label class="check" for="handsFree"><input type="checkbox" id="handsFree"> Gesprächsmodus: nach jeder Antwort wieder zuhören</label>
+    <label class="check" for="speakDe"><input type="checkbox" id="speakDe"> Deutsch auch vorlesen (sonst nur Spanisch)</label>
     <p class="hint">Zeigt die Liste nur eine Stimme je Sprache, wähle die Stimme in den Android-Einstellungen: Bedienungshilfen → Sprachausgabe → Zahnrad beim Google-Sprachdienst → „Sprachdaten installieren“.</p>
     <button class="btn ghost" id="testVoice" type="button">Stimme testen</button>
   </section>
@@ -349,7 +353,7 @@ textarea {
   var settings = $('settings'), toggleSettings = $('toggleSettings');
   var apiKeyEl = $('apiKey'), keyState = $('keyState');
   var levelEl = $('level'), modelEl = $('model'), voiceEl = $('voice'), voiceDeEl = $('voiceDe'), pitchEl = $('pitch'), klangEl = $('klang'), rateEl = $('rate'), micLangEl = $('micLang');
-  var autoSpeakEl = $('autoSpeak'), autoSendEl = $('autoSend'), handsFreeEl = $('handsFree');
+  var autoSpeakEl = $('autoSpeak'), autoSendEl = $('autoSend'), handsFreeEl = $('handsFree'), speakDeEl = $('speakDe');
 
   var ICON_SPEAK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>';
   var ICON_DE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M9 6c0 5-2 8-5 10M6 11c1 2 3 4 6 5M13 20l4-10 4 10M14.5 17h5"/></svg>';
@@ -374,6 +378,7 @@ textarea {
     autoSpeakEl.checked = store.get('autoSpeak', '1') === '1';
     autoSendEl.checked = store.get('autoSend', '1') === '1';
     handsFreeEl.checked = store.get('handsFree', '0') === '1';
+    speakDeEl.checked = store.get('speakDe', '0') === '1';
     if (!modelEl.value) modelEl.value = 'claude-sonnet-5-5';
   }
   function bindSetting(el, key, isCheck) {
@@ -382,7 +387,7 @@ textarea {
   restoreSettings();
   bindSetting(levelEl, 'level'); bindSetting(modelEl, 'model'); bindSetting(rateEl, 'rate');
   bindSetting(micLangEl, 'micLang'); bindSetting(voiceEl, 'voice'); bindSetting(voiceDeEl, 'voiceDe');
-  bindSetting(pitchEl, 'pitch'); bindSetting(klangEl, 'klang');
+  bindSetting(pitchEl, 'pitch'); bindSetting(klangEl, 'klang'); bindSetting(speakDeEl, 'speakDe', true);
   // Voreinstellung „Ruhige Bordstimme“: etwas tiefer, ruhig, beide Sprachen im gleichen Tempo.
   klangEl.addEventListener('change', function () {
     if (klangEl.value === 'bord') { pitchEl.value = '0.9'; rateEl.value = '0.85'; }
@@ -487,7 +492,7 @@ textarea {
 
   // Liest eine Folge von Teilen vor: [{sprache:'de'|'es', text}], jeder Teil mit passender Stimme.
   var speakTimer = null, watchTimer = null, speakRun = 0;
-  function speakParts(parts, onDone) {
+  function speakParts(parts, onDone, alleSprachen) {
     if (!synth || !window.SpeechSynthesisUtterance) {
       setStatus('Dieser Browser kann nicht vorlesen. Öffne die App in Chrome oder Safari.');
       if (onDone) onDone();
@@ -510,7 +515,10 @@ textarea {
       if (last && last.sprache === c.sprache && last.text.length + c.text.length < 220) last.text += ' ' + c.text;
       else merged.push({ sprache: c.sprache, text: c.text });
     });
+    // Standard: nur Spanisch vorlesen. Deutsche Teile stehen nur im Text.
+    if (!alleSprachen && !speakDeEl.checked) merged = merged.filter(function (c) { return c.sprache !== 'de'; });
     parts = merged;
+    if (!parts.length) { if (onDone) onDone(); return; }
     clearTimeout(speakTimer); clearTimeout(watchTimer);
     var run = ++speakRun;
     var busyNow = false;
@@ -590,7 +598,7 @@ textarea {
     var es = pickVoice('es'), de = pickVoice('de');
     setStatus('Stimmen auf dem Gerät: ' + voices.length + ' · Spanisch: ' + (es ? es.name + ' (' + es.lang + ')' : 'keine') +
       ' · Deutsch: ' + (de ? de.name + ' (' + de.lang + ')' : 'keine') + ' · Browser: ' + (/SamsungBrowser/.test(navigator.userAgent) ? 'Samsung Internet' : /Chrome\//.test(navigator.userAgent) ? 'Chrome' : 'anderer'));
-    speakParts([{ sprache: 'de', text: 'Hallo, ich bin deine Spanisch-Begleitung.' }, { sprache: 'es', text: '¡Hola! ¿Empezamos?' }]);
+    speakParts([{ sprache: 'de', text: 'Hallo, ich bin deine Spanisch-Begleitung.' }, { sprache: 'es', text: '¡Hola! ¿Empezamos?' }], null, true);
   });
 
   /* ---------- Anzeige ---------- */
@@ -611,14 +619,26 @@ textarea {
   function addBot(data) {
     var m = el('div', 'msg bot');
     var b = el('div', 'bubble');
-    var p = el('p', 'es');
-    (data.parts || []).forEach(function (part, i) {
-      if (i) p.appendChild(document.createTextNode(' '));
-      p.appendChild(richText(el('span', part.sprache === 'es' ? 'part-es' : 'part-de'), part.text));
-    });
-    b.appendChild(p);
+    var deParts = (data.parts || []).filter(function (x) { return x.sprache === 'de'; });
+    var esParts = (data.parts || []).filter(function (x) { return x.sprache !== 'de'; });
+    if (deParts.length) {
+      var pd = el('p', 'erkl');
+      deParts.forEach(function (part, i) {
+        if (i) pd.appendChild(document.createTextNode(' '));
+        pd.appendChild(richText(el('span'), part.text));
+      });
+      b.appendChild(pd);
+    }
+    if (esParts.length) {
+      var p = el('p', 'es');
+      esParts.forEach(function (part, i) {
+        if (i) p.appendChild(document.createTextNode(' '));
+        p.appendChild(richText(el('span', 'part-es'), part.text));
+      });
+      b.appendChild(p);
+    }
     var de = el('p', 'de', data.uebersetzung || '');
-    de.hidden = true;
+    de.hidden = stufe() !== 'A1';
     b.appendChild(de);
     m.appendChild(b);
     var row = el('div', 'row');
@@ -628,7 +648,7 @@ textarea {
     row.appendChild(sp);
     if (data.uebersetzung) {
       var tr = el('button', 'chip'); tr.type = 'button';
-      tr.setAttribute('aria-expanded', 'false');
+      tr.setAttribute('aria-expanded', String(!de.hidden));
       tr.innerHTML = ICON_DE + '<span>Deutsch</span>';
       tr.addEventListener('click', function () {
         de.hidden = !de.hidden;
@@ -872,6 +892,7 @@ textarea {
       $('resetVocab').hidden = false;
     }
     if (kursstand.lektion) parts.push('Aktuelle Lektion: ' + lessonName(kursstand.lektion) + '.');
+    if (st.total) parts.push('Vokabeln üben aus: ' + bereichName() + '.');
     stateEl.textContent = parts.join(' ');
   }
 
@@ -887,19 +908,35 @@ textarea {
     return e ? (L === 'B' ? '¡Bienvenidos!' : 'Lektion ' + L + ' „' + e.titel + '“') : 'Lektion ' + L;
   }
 
-  // Wörter für die nächste Antwort: fällige zuerst, dann neue (aktuelle Lektion zuerst, sonst nach Lektion).
+  // Welche Lektionen beim Vokabelüben dran sind: 'alle' oder eine Liste wie ['3','5']. Claude stellt das im Gespräch um.
+  function bereich() { var b = kursstand.bereich; return Array.isArray(b) && b.length ? b : 'alle'; }
+  function bereichName() { var b = bereich(); return b === 'alle' ? 'alle Lektionen' : 'Lektion ' + b.join(', '); }
+  function setBereich(raw) {
+    var t = String(raw == null ? '' : raw).trim();
+    if (!t) return;
+    var neu;
+    if (/^(alle|all|todo|todas)/i.test(t)) neu = 'alle';
+    else {
+      neu = [];
+      t.split(/[,;\s]+|und|y/).forEach(function (x) { var k = lessonKey(x.trim()); if (k && neu.indexOf(k) === -1 && vocab.some(function (v) { return lessonKey(v.l) === k; })) neu.push(k); });
+      if (!neu.length) return;
+    }
+    kursstand.bereich = neu; writeJSON('kursstand', kursstand); showVocabState();
+  }
+  // Zufällige, aber für die ganze Sitzung feste Reihenfolge – wie ein einmal gemischter Kartenstapel.
+  function mischwert(v) { if (v.r == null) v.r = Math.random(); return v.r; }
+  // Wörter für die nächste Antwort: fällige zuerst, dann neue aus dem gewählten Bereich (gemischt).
   function practiceSet(n) {
-    var now = Date.now(), due = [], fresh = [], cur = kursstand.lektion;
-    vocab.forEach(function (v) {
+    var now = Date.now(), due = [], fresh = [], b = bereich();
+    var pool = b === 'alle' ? vocab : vocab.filter(function (v) { return b.indexOf(lessonKey(v.l)) !== -1; });
+    if (!pool.length) pool = vocab;
+    pool.forEach(function (v) {
       var c = cards[v.k];
       if (!c) fresh.push(v);
       else if (c.due <= now) due.push(v);
     });
     due.sort(function (a, b) { return cards[a.k].due - cards[b.k].due; });
-    fresh.sort(function (a, b) {
-      var ca = cur && lessonKey(a.l) === cur ? 0 : 1, cb = cur && lessonKey(b.l) === cur ? 0 : 1;
-      return ca - cb || a.t - b.t || lessonNo(a.l) - lessonNo(b.l) || a.i - b.i;
-    });
+    fresh.sort(function (x, y) { return mischwert(x) - mischwert(y); });
     return due.slice(0, n).concat(fresh.slice(0, Math.max(0, n - due.length)));
   }
   function knownSet(n) {
@@ -933,6 +970,7 @@ textarea {
   var PROFIL_FELDER = ['ziel', 'zielregion', 'varietaet', 'niveau', 'sitzungsdauer', 'modalitaet', 'rollenspiel', 'korrektur_stil', 'sprachanteil', 'andere_sprachen'];
   function applyResult(data) {
     applyRatings(data.bewertung);
+    setBereich(data.vokabel_bereich);
     if (data.antwort_sprache === 'de' || data.antwort_sprache === 'es') setMicLang(data.antwort_sprache);
     var L = lessonKey(data.lektion);
     if (L && kurs && kurs.einheiten.some(function (e) { return e.lektion === L; }) && L !== kursstand.lektion) {
@@ -1066,8 +1104,8 @@ textarea {
   function sprachRegel() {
     var s = stufe(), a = (profil.sprachanteil || '').toLowerCase();
     var base = s === 'A1'
-      ? 'Der Rahmen deiner Antworten ist Deutsch. Streue spanische Wörter, Wendungen und kurze Sätze ein und übersetze jeden spanischen Satz direkt danach kurz auf Deutsch. Niemals ein ganzer spanischer Absatz ohne deutsche Brücke.'
-      : 'Sprich überwiegend Spanisch in kurzen, klaren Sätzen auf Niveau ' + s + '. Erklärungen, Grammatik und Korrekturen gibst du auf Deutsch. Fülle das Feld "uebersetzung" mit der deutschen Übersetzung deiner spanischen Teile.';
+      ? 'Erklärungen, Anleitungen und Rückmeldungen gibst du auf Deutsch. Der spanische Teil besteht aus wenigen kurzen, einfachen Sätzen. Fülle das Feld "uebersetzung" immer mit der deutschen Übersetzung des spanischen Teils – sie wird unter dem Spanischen angezeigt.'
+      : 'Sprich überwiegend Spanisch in kurzen, klaren Sätzen auf Niveau ' + s + '. Erklärungen, Grammatik und Korrekturen gibst du knapp auf Deutsch. Fülle das Feld "uebersetzung" mit der deutschen Übersetzung des spanischen Teils.';
     if (/mehr.?span/.test(a)) base += ' Der Lernende möchte mehr Spanisch als üblich – erhöhe den spanischen Anteil.';
     if (/mehr.?deut/.test(a)) base += ' Der Lernende möchte mehr Deutsch als üblich – erhöhe den deutschen Anteil.';
     return base;
@@ -1107,7 +1145,8 @@ textarea {
   function vocabText() {
     if (!vocab.length) return '';
     var practice = practiceSet(12), known = knownSet(6);
-    return '\nVOKABELN zum Üben (id | spanisch | deutsch | Hinweis | Lektion | Fach 0–5, 0 = neu):\n' + practice.map(vocabLine).join('\n') +
+    return '\nVOKABELBEREICH: ' + bereichName() + ' (fällige Wiederholungen kommen immer zuerst, neue Wörter gemischt aus dem Bereich).' +
+      '\nVOKABELN zum Üben (id | spanisch | deutsch | Hinweis | Lektion | Fach 0–5, 0 = neu):\n' + practice.map(vocabLine).join('\n') +
       (known.length ? '\nSchon gelernt (zum Einstreuen):\n' + known.map(vocabLine).join('\n') : '') + '\n';
   }
 
@@ -1122,7 +1161,7 @@ textarea {
       '– Kennenlernen: Stelle die Fragen zum Profil (Ziel, Zielregion, Varietät europäisch/lateinamerikanisch/neutral, Niveau, Zeit pro Sitzung, Lieblingsform lesen/hören/sprechen/schreiben/gemischt, Offenheit für Rollenspiele, Korrekturstil sanft/direkt) – eine Frage pro Antwort. Trage nur Werte ins Feld "profil" ein, die er selbst gesagt hat. Einen schon gespeicherten Wert änderst du nur, wenn er es ausdrücklich möchte oder zugestimmt hat. Am Ende fasst du das Profil in einem Satz zusammen und fragst, ob es passt.',
       '– Kurs: eine Lektion aus Con gusto in kleinen Schritten – Lernziele nennen, Wörter, Grammatik, Dialog, Lückentext, kleine Szene. Immer nur ein Schritt pro Antwort, dann fragst du, ob er weiter will. Wählt er eine Lektion, trägst du deren Kennung (B oder 1–12) ins Feld "lektion" ein. Im Kurs bleibst du beim A1-Stoff des Buchs; liegt eine Frage darüber, sag das freundlich und nenne den passenden A1-Vorläufer.',
       '– Erklären (Zweitlehrerin): Versteht er etwas nicht, erkläre es anders als das Buch. Wähle einen Blickwinkel und nenne ihn am Anfang: Analogie zum Deutschen, Gegenbeispiel, Schritt für Schritt, Beispielreihe, Anwendungsszene, Merksatz/Eselsbrücke oder Verweis auf eine spätere Lektion. Biete am Ende einen anderen Blickwinkel an. Höchstens fünf Sätze.',
-      '– Vokabeln üben: Frage pro Antwort genau ein Wort aus „VOKABELN zum Üben“ ab, meist „¿Cómo se dice «deutsches Wort»?“, ab und zu umgekehrt. Bewerte seine nächste Antwort großzügig (fehlender Artikel oder Akzent, offensichtlicher Erkennungsfehler oder gleichwertiges Wort gilt als richtig; falsches Geschlecht nur erwähnen) mit einer Note im Feld "bewertung": 1 = nicht gewusst oder falsch, 2 = mit Mühe oder Hilfe, 3 = richtig, 4 = sofort und sicher. Danach kurz Rückmeldung, richtiges Wort, bei Bedarf ein sehr kurzer Beispielsatz und gleich das nächste Wort – bis er etwas anderes möchte.',
+      '– Vokabeln üben: Möchte er Wörter aus bestimmten Lektionen („aus Lektion 3 und 5“) oder wieder aus allen, trägst du das ins Feld "vokabel_bereich" ein ("3,5" bzw. "alle") und bestätigst es kurz; die passende Liste bekommst du ab der nächsten Antwort. Sonst lässt du das Feld leer. Frage pro Antwort genau ein Wort aus „VOKABELN zum Üben“ ab, meist „¿Cómo se dice «deutsches Wort»?“, ab und zu umgekehrt. Bewerte seine nächste Antwort großzügig (fehlender Artikel oder Akzent, offensichtlicher Erkennungsfehler oder gleichwertiges Wort gilt als richtig; falsches Geschlecht nur erwähnen) mit einer Note im Feld "bewertung": 1 = nicht gewusst oder falsch, 2 = mit Mühe oder Hilfe, 3 = richtig, 4 = sofort und sicher. Danach kurz Rückmeldung, richtiges Wort, bei Bedarf ein sehr kurzer Beispielsatz und gleich das nächste Wort – bis er etwas anderes möchte.',
       '– Lückentext: Stelle einen Satz aus der Liste der aktuellen Lektion, warte auf seine Antwort, verrate die Lösung erst danach und erkläre sie kurz mit dem Hinweis.',
       'Im normalen Gespräch streust du gelegentlich, höchstens ein bis zwei pro Antwort, Wörter aus „Schon gelernt“ ein. Wörter aus seiner Liste markierst du mit doppelten Sternchen, z. B. **la tarta**. Sonst keine Formatierung.',
       'KORREKTUR: ' + ((profil.korrektur_stil || '').indexOf('direkt') !== -1 ? 'direkt und knapp.' : 'sanft und ermutigend („Fast! Es heißt …“).') + ' Seine Nachrichten stammen oft aus einer Spracherkennung: ignoriere fehlende Satzzeichen und Großschreibung, deute verstümmelte deutsche Sätze wohlwollend und korrigiere nur echte sprachliche Fehler (im Feld "korrektur", auf Deutsch).',
@@ -1131,9 +1170,9 @@ textarea {
       kursText(),
       vocabText(),
       'ANTWORTFORMAT: ausschließlich ein JSON-Objekt, ohne Codeblock und ohne Text davor oder danach:',
-      '{"antwort":[{"sprache":"de" oder "es","text":"..."}, ...], "uebersetzung":"deutsche Übersetzung der spanischen Teile oder leer", "korrektur":"kurz auf Deutsch oder leer", "modus":"gespraech|kennenlernen|kurs|erklaeren|vokabeln|lueckentext", "frage_id":"id des gerade abgefragten Wortes oder leer", "bewertung":[{"id":"v12","note":3}] oder [], "lektion":"B, 1–12 oder leer", "profil":{"feld":"wert"} oder {}, "antwort_sprache":"de oder es"}',
+      '{"antwort":[{"sprache":"de" oder "es","text":"..."}, ...], "uebersetzung":"deutsche Übersetzung der spanischen Teile oder leer", "korrektur":"kurz auf Deutsch oder leer", "modus":"gespraech|kennenlernen|kurs|erklaeren|vokabeln|lueckentext", "frage_id":"id des gerade abgefragten Wortes oder leer", "bewertung":[{"id":"v12","note":3}] oder [], "lektion":"B, 1–12 oder leer", "profil":{"feld":"wert"} oder {}, "antwort_sprache":"de oder es", "vokabel_bereich":"alle, Lektionen wie 3,5 oder leer"}',
       '"antwort_sprache" ist die Sprache, in der der Lernende vermutlich als Nächstes antwortet – danach richtet sich seine Spracherkennung. Fragst du auf Deutsch etwas, das er auf Deutsch beantworten wird (Kennenlernen, Wünsche, Rückfragen), dann "de". Erwartest du eine spanische Antwort (Vokabel auf Spanisch, Lückentext, Gespräch auf Spanisch), dann "es".',
-      'Teile "antwort" so auf, dass jeder Teil nur eine Sprache enthält: Jeder deutsche Satz kommt in einen Teil mit "sprache":"de", jeder spanische Satz in einen Teil mit "sprache":"es" – sie werden mit einer deutschen bzw. spanischen Stimme vorgelesen. Einzelne spanische Wörter mitten in einem deutschen Satz dürfen im deutschen Teil bleiben. Erlaubte Profilfelder: ' + PROFIL_FELDER.join(', ') + '.'
+      'AUFBAU von "antwort": höchstens ein Teil {"sprache":"de"} zuerst, mit allem Deutschen (Erklärung, Rückmeldung, Anleitung) – er wird nur angezeigt, nicht vorgelesen, und muss für sich allein verständlich sein. Danach ein Teil {"sprache":"es"} mit ganzen spanischen Sätzen – nur er wird vorgelesen; darin kein deutscher Satz. Die Frage oder Aufgabe an den Lernenden steht, wenn möglich, im spanischen Teil (z. B. „¿Cómo se dice «Haus»?“). Einzelne spanische Wörter im deutschen Teil sind erlaubt. Erlaubte Profilfelder: ' + PROFIL_FELDER.join(', ') + '.'
     ].join('\n');
   }
 
@@ -1167,11 +1206,12 @@ textarea {
           modus: String(v.modus || ''), frage_id: String(v.frage_id || ''),
           bewertung: Array.isArray(v.bewertung) ? v.bewertung : [], lektion: String(v.lektion || ''),
           antwort_sprache: String(v.antwort_sprache || ''),
+          vokabel_bereich: String(v.vokabel_bereich || ''),
           profil: v.profil && typeof v.profil === 'object' ? v.profil : {}
         };
       } catch (e) {}
     }
-    return t ? { parts: [{ sprache: 'de', text: t }], uebersetzung: '', korrektur: '' } : null;
+    return t ? { parts: [{ sprache: guessLang(t, 'de'), text: t }], uebersetzung: '', korrektur: '' } : null;
   }
 
   function explainError(status, body) {
